@@ -72,6 +72,11 @@ for matrix, Windows, and reusable-workflow examples.
 
 ## Quick start
 
+Want a runnable demo? [**sotto-example**](https://github.com/getsotto/sotto-example)
+walks through local secret injection with a Python GIF and copyable steps, plus tiny examples
+in JavaScript, TypeScript, Java, C#, PHP, Go, and C++. No account required; instructions cover
+macOS, Linux, and Windows.
+
 ```sh
 sotto init                   # create your identity + first project - SAVE the printed Emergency Kit
 sotto set DATABASE_URL       # hidden prompt; encrypted locally before it ever touches disk
