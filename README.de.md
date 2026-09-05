@@ -4,29 +4,29 @@
 
 # Sotto
 
-Ende-zu-Ende-verschlüsselte Geheimnis-Synchronisierung für Entwicklerteams. Schluss mit `.env` per Slack.
+Ende-zu-Ende-verschlüsselte Secret-Synchronisierung für Entwicklerteams. Schluss mit `.env` per Slack.
 
 > [!WARNING]
-> Sotto ist vor Version 1.0 und wurde **nicht** durch ein unabhängiges kryptografisches Audit geprüft. Es funktioniert durchgehend,
-> sollte aber noch keine kritischen Produktionsgeheimnisse schützen. Siehe [SECURITY.md](SECURITY.md).
+> Sotto ist Pre-1.0-Software und hat **kein** kryptografisches Audit durch Dritte durchlaufen. Es funktioniert Ende zu Ende,
+> doch solltest du ihm noch keine kritischen Produktions-Secrets anvertrauen. Siehe [SECURITY.md](SECURITY.md).
 
 Sotto basiert auf einer einzigen Rust-Kryptoimplementierung, die sich die native CLI und der Browser-Client über
-WebAssembly teilen. Der Server speichert und synchronisiert verschlüsselte Daten, ohne jemals Klartext-Geheimnisse
+WebAssembly teilen. Der Server speichert und synchronisiert verschlüsselte Daten, ohne jemals Klartext-Secrets
 oder verwendbare Schlüssel zu erhalten.
 
 ## Aktueller Stand
 
-Der durchgehende Ablauf funktioniert: lokal verschlüsseln, Chiffrat synchronisieren, auf einem anderen Gerät oder im
-Browser entschlüsseln und ein einzelnes Geheimnis über einen Einmal-Link teilen. Teams funktionieren ebenfalls durchgehend:
-Organisationen mit Rollen, Umgebungsfreigaben pro Mitglied, Schlüsselrotation beim Entfernen von Mitgliedern,
+Der Ende-zu-Ende-Ablauf funktioniert: lokal verschlüsseln, Chiffrat synchronisieren, auf einem anderen Gerät oder im
+Browser entschlüsseln und ein einzelnes Secret über einen Einmal-Link teilen. Auch für Teams funktioniert der gesamte Ablauf:
+Organisationen mit Rollen, Umgebungs-Grants pro Mitglied, Schlüsselrotation beim Entfernen von Mitgliedern,
 Maschinen-Token für CI und Kontowiederherstellung bei Schlüsselverlust.
 
 | Komponente | Jetzt verfügbar |
 | --- | --- |
-| Krypto-Kern | KDF, XChaCha20-Poly1305 AEAD + AAD, Schlüsselverpackung, versiegelte X25519-Freigaben, die Tresor-Hierarchie der Umgebungen, Neuverpackung von Datenschlüsseln (Rotation), Link-Freigabe-Krypto und Schlüsselkodierung, mit gemeinsamen Referenzvektoren für native und WASM-Builds |
-| CLI | `init`, lokale Geheimnisverwaltung, Injektion per `run`, Synchronisierung mit `login`/`push`/`pull`, `setup` für neue Geräte, `share`; Teams: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, Maschinen-`token create/ls/revoke` (mit `SOTTO_TOKEN`-Modus für CI), `reset` mit Notfall-Kit |
-| Server | OAuth-Anmeldung + Sitzungen, Konto- und Snapshot-Synchronisierung (versionierte Schreibvorgänge, ETag), Organisationen + Mitgliedschaften + Rollen, Tresorschlüssel-Freigaben pro Mitglied, transaktionale Schlüsselrotation, Maschinen-Token, Konto-Zurücksetzung und Freigabe-Links, nur Chiffrat |
-| Web | Anmeldung (Cookie-Sitzung), Entsperren im Browser + Tresorentschlüsselung mit der eigenen Freigabe, Erstellen und Empfangen von Einmal-Freigaben, und ein Team-Panel: Organisationen, Mitglieder, Einladung per E-Mail, Teilen einer Umgebung mit einem Mitglied |
+| Krypto-Kern | KDF, XChaCha20-Poly1305 AEAD + AAD, Key-Wrapping, X25519-Sealed-Box-Grants, die Tresor-Hierarchie der Umgebungen, Rewrap von Datenschlüsseln (Rotation), Share-Link-Krypto und Schlüsselkodierung, mit gemeinsamen Referenzvektoren für native und WASM-Builds |
+| CLI | `init`, lokale Secret-Verwaltung, Injektion per `run`, Synchronisierung mit `login`/`push`/`pull`, `setup` für neue Geräte, `share`; Teams: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, Maschinen-`token create/ls/revoke` (mit `SOTTO_TOKEN`-Modus für CI), `reset` bei verlorenem Notfall-Kit |
+| Server | OAuth-Anmeldung + Sitzungen, Konto- und Snapshot-Synchronisierung (versionierte Schreibvorgänge, ETag), Organisationen + Mitgliedschaften + Rollen, Tresorschlüssel-Grants pro Mitglied, transaktionale Schlüsselrotation, Maschinen-Token, Konto-Zurücksetzung und Share-Links - nur Chiffrat |
+| Web | Anmeldung (Cookie-Sitzung), Entsperren im Browser + Tresorentschlüsselung mit dem eigenen Grant, Erstellen und Empfangen von Einmal-Links und ein Team-Panel: Organisationen, Mitglieder, Einladung per E-Mail, Teilen einer Umgebung mit einem Mitglied |
 
 ## Installation
 
@@ -50,7 +50,7 @@ Windows). Lieber erst ansehen? Lade ein Archiv von der
 ### GitHub Actions
 
 Für GitHub Actions verwende die [Sotto-Setup-Action](https://github.com/getsotto/sotto-action), um ein exaktes
-CLI-Release zu installieren und dessen Prüfsumme sowie Sigstore-Pakete zu verifizieren, bevor `sotto` für spätere
+CLI-Release zu installieren und dessen Prüfsumme sowie Sigstore-Bundles zu verifizieren, bevor `sotto` für spätere
 Schritte bereitsteht:
 
 ```yaml
@@ -69,15 +69,15 @@ jobs:
 ```
 
 Die Action-Referenz und `sotto-version` sind unabhängig. Das Beispiel pinnt die zusammengeführte v1.1-Implementierung
-per vollständigem Commit-SHA, weil noch kein nummeriertes Action-Release veröffentlicht wurde. Halte
-`sotto-version` als exakte `vX.Y.Z`-Version. Setze die optionale Repository-Variable `SOTTO_SERVER`
+per vollständigen Commit-SHA, weil noch kein nummeriertes Action-Release veröffentlicht wurde. Belasse
+`sotto-version` bei einem exakten `vX.Y.Z`-Release. Setze die optionale Repository-Variable `SOTTO_SERVER`
 für einen selbst gehosteten Server. Siehe die [Action-Dokumentation](https://github.com/getsotto/sotto-action#readme)
 für Matrix-, Windows- und Reusable-Workflow-Beispiele.
 
 ## Schnellstart
 
 Lust auf eine lauffähige Demo? [**sotto-example**](https://github.com/getsotto/sotto-example)
-zeigt lokale Geheimnis-Injektion mit einem Python-GIF und kopierbaren Schritten, plus winzige Beispiele
+zeigt lokale Secret-Injektion mit einem Python-GIF und kopierbaren Schritten, plus winzige Beispiele
 in JavaScript, TypeScript, Java, C#, PHP, Go und C++. Kein Konto erforderlich; die Anleitungen decken
 macOS, Linux und Windows ab.
 
@@ -90,8 +90,8 @@ sotto login && sotto push    # optional: sync ciphertext via the hosted instance
 sotto share DATABASE_URL     # one-time, burn-after-reading link for a single secret
 ```
 
-`sotto login` verwendet die gehostete Instanz unter [getsotto.co.uk](https://getsotto.co.uk), sofern du nicht mit
-`--server <url>` anderswohin zeigst (siehe [Bereitstellung](deploy/README.md) für den eigenen Betrieb). In jedem Fall
+`sotto login` verwendet die gehostete Instanz unter [getsotto.co.uk](https://getsotto.co.uk), sofern du die CLI nicht mit
+`--server <url>` auf einen anderen Server richtest (siehe [Bereitstellung](deploy/README.md) für den eigenen Betrieb). In jedem Fall
 speichert der Server nur Chiffrat: Der Web-Tresor unter derselben Adresse entschlüsselt in deinem
 Browser, mit Schlüsseln, die deine Geräte nie verlassen.
 
@@ -152,8 +152,8 @@ cargo run -p sotto-cli -- set DATABASE_URL     # hidden prompt
 cargo run -p sotto-cli -- run -- your-command  # inject secrets as env vars into a subprocess
 ```
 
-Geheimnisse liegen in einem lokalen SQLite-Speicher verschlüsselt; der Hauptschlüssel liegt im OS-Schlüsselbund
-mit TTL. Die Synchronisierung mit einem Server (`login`/`push`/`pull`/`setup`/`share`) ist optional.
+Secrets liegen in einem lokalen SQLite-Speicher verschlüsselt; der Hauptschlüssel wird mit einer TTL im OS-Schlüsselbund
+zwischengespeichert. Die Synchronisierung mit einem Server (`login`/`push`/`pull`/`setup`/`share`) ist optional.
 
 ### Server ausführen
 
@@ -165,11 +165,11 @@ curl http://127.0.0.1:8080/health   # → ok
 ```
 
 Die GitHub-OAuth-Anmeldung erfordert `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. Für jedes nicht-lokale Deployment
-setze zusätzlich `SOTTO_PUBLIC_URL` auf die öffentlich erreichbare Herkunft des Servers: Daraus wird die
-GitHub-Callback-URL gebaut, sie muss mit dem registrierten Callback der OAuth-App übereinstimmen (sonst Standard
-`http://localhost:8080`); und für den Web-Client `SOTTO_WEB_ORIGIN`. Ohne OAuth startet der Server trotzdem
+setze zusätzlich `SOTTO_PUBLIC_URL` auf den extern erreichbaren Origin des Servers (daraus wird die
+GitHub-Callback-URL gebaut; sie muss mit dem registrierten Callback der OAuth-App übereinstimmen, andernfalls gilt
+der Standard `http://localhost:8080`) und für den Web-Client `SOTTO_WEB_ORIGIN`. Ohne OAuth startet der Server trotzdem
 (bedient `/health` und führt Migrationen aus), aber Anmeldung und alle authentifizierten Endpunkte (Sync,
-Freigabe-Erstellung) sind nicht verfügbar.
+Share-Link-Erstellung) sind nicht verfügbar.
 
 ### Web-Client
 
@@ -187,8 +187,8 @@ npm run build    # production bundle → web/dist (strict CSP + Subresource Inte
 Ein Befehl bringt eine komplette gehostete Instanz hoch: Postgres, Server und Caddy mit automatischem HTTPS,
 aus [`deploy/docker-compose.prod.yml`](deploy/docker-compose.prod.yml); die Anleitung steht in
 [`deploy/README.md`](deploy/README.md). Die Teile funktionieren auch eigenständig: Betreibe Web-App und API unter
-**einer Herkunft** (damit Sitzungs-Cookie und CSP auf derselben Herkunft bleiben); die mitgelieferte
-[`Caddyfile`](Caddyfile) serviert `web/dist` und leitet die API per Reverse-Proxy weiter, mit Sicherheits-Headern;
+**einem Origin** (damit Sitzungs-Cookie und CSP same-origin bleiben); die mitgelieferte
+[`Caddyfile`](Caddyfile) liefert `web/dist` aus und leitet die API per Reverse-Proxy weiter, mit Sicherheits-Headern;
 das [`Dockerfile`](Dockerfile) baut das Server-Image (Migrationen laufen beim Start).
 
 ## Entwicklungsprüfungen
@@ -242,7 +242,7 @@ Der Web-Build und sein Abhängigkeits-Audit laufen in der CI (`.github/workflows
 Der **Server** sendet einen anonymen Ping pro Tag (in den ersten 10-20 Minuten nach dem Start) an
 `https://getsotto.co.uk/telemetry/v1/ping`, um aktive Instanzen zu zählen und zu sehen, welche
 Versionen im Umlauf sind. Die Antwort nennt das neueste Release, und der Server protokolliert eine Zeile, wenn er
-veraltet läuft. Das ist die **gesamte** Nutzlast: Der Sendecode steht in
+in einer veralteten Version läuft. Das ist die **gesamte** Nutzlast: Der Sendecode steht in
 [`crates/server/src/telemetry.rs`](crates/server/src/telemetry.rs), und ein Unit-Test nagelt die Nutzlast auf genau
 diese vier Felder fest:
 
@@ -253,16 +253,16 @@ diese vier Felder fest:
 `instance_id` ist eine zufällige UUID, die einmal erzeugt und in deiner Datenbank gespeichert wird, aus nichts abgeleitet,
 sodass sie keine Hardware, keinen Host und kein Konto identifiziert; lösche sie, und die Instanz wird ein frischer
 anonymer Zähler. Die Empfangsseite speichert keine IP-Adressen und keinen abgeleiteten Standort. Keine Org-, Mitglieder-
-oder Geheimnis-Zähler, keine Nutzungsereignisse. **CLI, Web-Client und WASM senden niemals etwas.**
+oder Secret-Zähler, keine Nutzungsereignisse. **CLI, Web-Client und WASM senden niemals etwas.**
 
-Opt-out mit `SOTTO_TELEMETRY=off` (oder dem werkzeugübergreifenden
-[`DO_NOT_TRACK=1`](https://consoledonottrack.com)): Deaktiviert wird der Task nie gestartet und keine Anfrage gestellt.
-`SOTTO_TELEMETRY_URL` leitet den Ping um (zum Beispiel, um eine private Flotte zu aggregieren), und Datensätze, die
-12 Monate inaktiv waren, werden aus dem gehosteten Zensus gelöscht.
+Opt-out mit `SOTTO_TELEMETRY=off` (oder dem werkzeugübergreifenden [`DO_NOT_TRACK=1`](https://consoledonottrack.com)): Ist
+die Telemetrie deaktiviert, wird der Task nie gestartet und nie eine Anfrage gesendet. `SOTTO_TELEMETRY_URL` leitet den Ping
+um (zum Beispiel, um eine private Flotte zu aggregieren), und Datensätze, die 12 Monate inaktiv waren, werden aus der
+gehosteten Erhebung gelöscht.
 
 ## Sicherheit
 
-Sottos Modell ist Zero-Knowledge: Klartext-Geheimnisse und verwendbare Entschlüsselungsschlüssel bleiben auf den
+Sottos Modell ist Zero-Knowledge: Klartext-Secrets und verwendbare Entschlüsselungsschlüssel bleiben auf den
 Client-Geräten, und der Server sieht nur Chiffrat plus minimale Metadaten. Das ist implementiert, aber **noch nicht
 unabhängig auditiert**: siehe [SECURITY.md](SECURITY.md) für das Modell, die ehrliche Metadaten-Offenlegung, wie die
 (erneut geholte, schwächere) Web-Oberfläche gehärtet ist und wie man signierte Releases verifiziert. Das vollständige

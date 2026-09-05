@@ -7,8 +7,8 @@
 La synchronisation de secrets chiffrés de bout en bout pour les équipes de développement. Arrêtez d'envoyer votre `.env` sur Slack.
 
 > [!WARNING]
-> Sotto est pré-1.0 et n'a **pas** fait l'objet d'un audit cryptographique indépendant. Il fonctionne de bout en bout, mais
-> ne devrait pas encore protéger des secrets critiques de production. Voir [SECURITY.md](SECURITY.md).
+> Sotto est pré-1.0 et n'a **pas** fait l'objet d'un audit cryptographique par un tiers. Il fonctionne de bout en bout, mais
+> vous ne devriez pas encore lui confier de secrets critiques de production. Voir [SECURITY.md](SECURITY.md).
 
 Sotto repose sur une seule implémentation cryptographique Rust partagée par la CLI native et le client
 navigateur via WebAssembly. Le serveur stocke et synchronise des données chiffrées sans jamais
@@ -18,15 +18,15 @@ recevoir de secrets en clair ni de clés utilisables.
 
 Le flux de bout en bout fonctionne : chiffrez en local, synchronisez du texte chiffré, déchiffrez sur un autre appareil ou dans le
 navigateur, et partagez un secret unique via un lien à usage unique. Les équipes fonctionnent aussi de bout en bout : organisations
-avec rôles, attributions d'environnement par membre, rotation des clés au départ d'un membre, jetons machine pour la CI
-et récupération de compte en cas de clé perdue.
+avec rôles, grants d'environnement par membre, rotation des clés lors du retrait d'un membre, jetons machine pour la CI
+et récupération de compte en cas de perte de clé.
 
 | Composant | Disponible dès maintenant |
 | --- | --- |
-| Noyau cryptographique | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulation de clés, attributions scellées X25519, la hiérarchie des coffres d'environnement, ré-encapsulation des clés de données (rotation), cryptographie des liens de partage et encodage des clés, avec des vecteurs de référence partagés entre les compilations natives et WASM |
-| CLI | `init`, gestion locale des secrets, injection via `run`, synchronisation `login`/`push`/`pull`, `setup` pour un nouvel appareil, `share` ; équipes : `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` machine (avec le mode `SOTTO_TOKEN` pour la CI), `reset` avec kit d'urgence |
-| Serveur | Connexion OAuth + sessions, synchronisation des comptes + instantanés (écritures versionnées, ETag), organisations + appartenances + rôles, attributions de clés de coffre par membre, rotation transactionnelle des clés, jetons machine, réinitialisation de compte et liens de partage, uniquement du texte chiffré |
-| Web | Connexion (session cookie), déverrouillage dans le navigateur + déchiffrement du coffre via votre propre attribution, création et réception de partages à usage unique, et un panneau d'équipe : organisations, membres, invitation par e-mail, partage d'un environnement avec un membre |
+| Noyau cryptographique | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulation de clés, grants sealed-box X25519, la hiérarchie des coffres d'environnement, ré-encapsulation des clés de données (rotation), cryptographie des liens de partage et encodage des clés, avec des vecteurs de référence natif↔WASM |
+| CLI | `init`, gestion locale des secrets, injection via `run`, synchronisation `login`/`push`/`pull`, `setup` pour un nouvel appareil, `share` ; équipes : `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` machine (avec le mode `SOTTO_TOKEN` pour la CI), `reset` en cas de perte du kit d'urgence |
+| Serveur | Connexion OAuth + sessions, synchronisation des comptes + instantanés (écritures versionnées, ETag), organisations + appartenances + rôles, grants de clés de coffre par membre, rotation transactionnelle des clés, jetons machine, réinitialisation de compte et liens de partage - uniquement du texte chiffré |
+| Web | Connexion (session cookie), déverrouillage dans le navigateur + déchiffrement du coffre via votre propre grant, création et réception de partages à usage unique, et un panneau d'équipe : organisations, membres, invitation par e-mail, partage d'un environnement avec un membre |
 
 ## Installation
 
@@ -50,7 +50,7 @@ Windows). Vous préférez vérifier d'abord ? Récupérez une archive sur la
 ### GitHub Actions
 
 Pour GitHub Actions, utilisez l'[action Sotto Setup](https://github.com/getsotto/sotto-action) pour
-installer une version exacte de la CLI et vérifier sa somme de contrôle ainsi que ses paquets Sigstore avant de mettre `sotto`
+installer une version exacte de la CLI et vérifier sa somme de contrôle ainsi que ses bundles Sigstore avant de mettre `sotto`
 à disposition des étapes suivantes :
 
 ```yaml
@@ -68,11 +68,11 @@ jobs:
           SOTTO_TOKEN: ${{ secrets.SOTTO_TOKEN }}
 ```
 
-La référence de l'action et `sotto-version` sont indépendantes. L'exemple fige l'implémentation v1.1 fusionnée
-par SHA complet de commit car aucune version numérotée de l'action n'a encore été publiée. Gardez
-`sotto-version` comme une version exacte `vX.Y.Z`. Définissez la variable de dépôt optionnelle `SOTTO_SERVER`
-pour un serveur auto-hébergé. Voir la [documentation de l'action](https://github.com/getsotto/sotto-action#readme)
-pour des exemples de matrices, Windows et workflows réutilisables.
+La référence de l'action et `sotto-version` sont indépendantes. L'exemple épingle, par le SHA complet du commit,
+l'implémentation v1.1 fusionnée car aucune version numérotée de l'action n'a encore été publiée. Gardez `sotto-version` sur
+une version exacte `vX.Y.Z`. Définissez la variable de dépôt optionnelle `SOTTO_SERVER` pour un serveur auto-hébergé. Voir la
+[documentation de l'action](https://github.com/getsotto/sotto-action#readme) pour des exemples de matrices, Windows et
+workflows réutilisables.
 
 ## Démarrage rapide
 
@@ -90,8 +90,8 @@ sotto login && sotto push    # optional: sync ciphertext via the hosted instance
 sotto share DATABASE_URL     # one-time, burn-after-reading link for a single secret
 ```
 
-`sotto login` utilise l'instance hébergée sur [getsotto.co.uk](https://getsotto.co.uk) sauf si vous pointez
-ailleurs avec `--server <url>` (voir [Déploiement](deploy/README.md) pour héberger le vôtre). Dans tous les cas
+`sotto login` utilise l'instance hébergée sur [getsotto.co.uk](https://getsotto.co.uk) sauf si vous le faites pointer
+ailleurs avec `--server <url>` (voir [Déploiement](deploy/README.md) pour héberger le vôtre). Dans tous les cas,
 le serveur ne stocke que du texte chiffré : le coffre web à la même adresse déchiffre dans votre
 navigateur, avec des clés qui ne quittent jamais vos appareils.
 
@@ -153,7 +153,7 @@ cargo run -p sotto-cli -- set DATABASE_URL     # hidden prompt
 cargo run -p sotto-cli -- run -- your-command  # inject secrets as env vars into a subprocess
 ```
 
-Les secrets sont chiffrés au repos dans un magasin SQLite local ; la clé maîtresse est conservée dans le trousseau du système
+Les secrets sont chiffrés au repos dans un magasin SQLite local ; la clé maîtresse est mise en cache dans le trousseau du système
 avec un TTL. La synchronisation vers un serveur (`login`/`push`/`pull`/`setup`/`share`) est optionnelle.
 
 ### Exécution du serveur
@@ -165,12 +165,12 @@ DATABASE_URL=postgres://sotto:sotto@localhost:5432/sotto cargo run -p sotto-serv
 curl http://127.0.0.1:8080/health   # → ok
 ```
 
-La connexion GitHub OAuth requiert `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. Pour tout déploiement non local,
-définissez aussi `SOTTO_PUBLIC_URL` sur l'origine publique du serveur : elle construit l'URL de rappel
-GitHub et doit correspondre au rappel enregistré dans l'application OAuth (à défaut, `http://localhost:8080`),
-ainsi que `SOTTO_WEB_ORIGIN` pour le client web. Sans OAuth, le serveur démarre quand même (il sert `/health`
-et exécute les migrations), mais la connexion et tous les points d'accès authentifiés (synchronisation,
-création de partages) sont indisponibles.
+La connexion GitHub OAuth requiert `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. Pour tout déploiement non local, définissez
+aussi `SOTTO_PUBLIC_URL` sur l'origine publique du serveur, celle qui est joignable depuis l'extérieur (elle construit l'URL
+de callback GitHub et doit correspondre au callback enregistré dans l'application OAuth, à défaut `http://localhost:8080`).
+Définissez également `SOTTO_WEB_ORIGIN` pour le client web. Sans OAuth, le serveur démarre quand même (il sert `/health` et exécute les
+migrations), mais la connexion et tous les points de terminaison authentifiés (synchronisation, création de partages) sont
+indisponibles.
 
 ### Client web
 
@@ -185,7 +185,7 @@ npm run build    # production bundle → web/dist (strict CSP + Subresource Inte
 
 ### Déploiement
 
-Une seule commande déploie une instance hébergée complète : Postgres, le serveur et Caddy avec HTTPS
+Une seule commande démarre une instance hébergée complète : Postgres, le serveur et Caddy avec HTTPS
 automatique, depuis [`deploy/docker-compose.prod.yml`](deploy/docker-compose.prod.yml) ; le guide est dans
 [`deploy/README.md`](deploy/README.md). Les éléments fonctionnent aussi séparément : servez l'application web et l'API
 depuis **une même origine** (pour que le cookie de session et la CSP restent sur la même origine) ; le
@@ -209,7 +209,7 @@ La politique de chaîne d'approvisionnement est définie dans `deny.toml` et vé
 cargo deny check
 ```
 
-L'audit complet du lockfile s'exécute aussi dans le travail `supply-chain` de la CI (Python 3.11+ requis) :
+L'audit complet du lockfile s'exécute aussi dans le job `supply-chain` de la CI (Python 3.11+ requis) :
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -218,18 +218,18 @@ scripts/check-cargo-audit
 ```
 
 La [politique d'audit](.ci/cargo-audit-policy.toml) consigne des exceptions exactes pour les entrées dormantes `rsa` et
-`spin` du lockfile. Chacune doit correspondre en paquet, version, registre et résultat, sans aucun chemin de dépendance
-normale, de compilation ou de test sur toutes les cibles, avec les fonctionnalités par défaut et toutes celles de l'espace de travail.
-Nouveaux résultats, identités modifiées, paquets atteignables, analyses échouées et exceptions obsolètes font échouer la CI.
-Supprimez une exception dans la même PR que celle qui supprime son résultat ; une liste d'exceptions vide exige un audit propre.
-`cargo audit` brut rapporte toujours ces résultats : cette politique documente et vérifie leur dormance, et n'affirme pas
-que les versions vulnérables ou retirées ont été corrigées. Les [paramètres d'audit](.cargo/audit.toml) du projet maintiennent
-la récupération des avis et les vérifications de retraits activées, et remplacent la configuration globale d'audit du développeur.
-N'ajoutez ni exclusions d'avis ni filtres d'analyse. Le vérificateur exécute aussi un audit au format terminal pour détecter
-les défaillances de registre que cargo-audit 0.22.2 peut omettre dans la sortie JSON, afin qu'une analyse de paquets
-retirés indisponible ne compte pas comme un résultat propre.
+`spin` du lockfile. Chacune doit correspondre à son paquet, sa version, son registre et son résultat, sans aucun chemin de
+dépendance normale, de compilation ou de test sur toutes les cibles, avec les fonctionnalités par défaut et toutes celles de
+l'espace de travail. Tout nouveau résultat, toute identité modifiée, tout paquet atteignable, toute analyse en échec et toute
+exception obsolète font échouer la CI. Supprimez une exception dans la même PR que celle qui supprime son résultat ; une
+liste d'exceptions vide exige un audit propre. `cargo audit` brut rapporte toujours ces résultats : cette politique documente
+et vérifie leur dormance, et n'affirme pas que les versions vulnérables ou retirées ont été corrigées.
+Les [paramètres d'audit](.cargo/audit.toml) du projet maintiennent la récupération des avis et les vérifications
+de versions retirées activées, et remplacent la configuration globale d'audit du développeur. N'ajoutez ni exclusions d'avis ni filtres d'analyse.
+Le vérificateur exécute aussi un audit au format terminal pour détecter les défaillances de registre que cargo-audit 0.22.2
+peut omettre dans la sortie JSON, afin qu'une analyse de paquets retirés indisponible ne compte pas comme un résultat propre.
 
-Le portail inter-implémentations prouve que les compilations native et WASM concordent : le texte chiffré produit en natif
+Le contrôle inter-implémentations prouve que les compilations native et WASM concordent : le texte chiffré produit en natif
 se déchiffre à l'octet près en WASM à partir de vecteurs de référence partagés :
 
 ```sh
@@ -243,8 +243,8 @@ La compilation web et son audit de dépendances s'exécutent en CI (`.github/wor
 Le **serveur** envoie un ping anonyme par jour (dans les 10 à 20 premières minutes après le démarrage) à
 `https://getsotto.co.uk/telemetry/v1/ping`, afin de compter les instances actives et de voir quelles
 versions circulent. La réponse nomme la dernière version, et le serveur journalise une ligne lorsqu'il exécute
-une version dépassée. C'est la charge **entière** : le code d'envoi est dans
-[`crates/server/src/telemetry.rs`](crates/server/src/telemetry.rs), et un test unitaire fige la charge à
+une version dépassée. C'est la charge utile **entière** : le code d'envoi est dans
+[`crates/server/src/telemetry.rs`](crates/server/src/telemetry.rs), et un test unitaire fige la charge utile à
 exactement ces quatre champs :
 
 ```json
@@ -253,8 +253,8 @@ exactement ces quatre champs :
 
 `instance_id` est un UUID aléatoire généré une fois et stocké dans votre base de données, dérivé de rien,
 donc il n'identifie ni matériel, ni hôte, ni compte ; le supprimer fait de l'instance un compteur anonyme
-tout neuf. Côté ingestion, aucune adresse IP ni localisation dérivée n'est stockée. Ni comptes d'organisations,
-de membres ou de secrets, ni événements d'usage. La **CLI, le client web et WASM n'envoient jamais rien**.
+tout neuf. Côté ingestion, aucune adresse IP ni localisation dérivée n'est stockée. Il n'y a pas non plus de décomptes d'organisations,
+de membres ou de secrets, ni d'événements d'usage. La **CLI, le client web et WASM n'envoient jamais rien**.
 
 Désactivez avec `SOTTO_TELEMETRY=off` (ou la variable inter-outils
 [`DO_NOT_TRACK=1`](https://consoledonottrack.com)) : désactivée, la tâche n'est jamais démarrée et aucune
@@ -263,10 +263,10 @@ et les enregistrements inactifs depuis 12 mois sont purgés du recensement hébe
 
 ## Sécurité
 
-Le modèle de Sotto est zéro-connaissance : les secrets en clair et les clés de déchiffrement utilisables restent sur les
+Le modèle de Sotto est zero-knowledge : les secrets en clair et les clés de déchiffrement utilisables restent sur les
 appareils clients, et le serveur ne voit que du texte chiffré plus des métadonnées minimales. C'est implémenté mais
 **pas encore audité de façon indépendante** : voir [SECURITY.md](SECURITY.md) pour le modèle, l'exposition honnête
-des métadonnées, la manière dont la surface web (récupérée à nouveau, plus faible) est durcie, et comment vérifier
+des métadonnées, la manière dont la surface web (retéléchargée à chaque visite, donc plus faible) est durcie, et comment vérifier
 les versions signées. Le modèle d'adversaire complet, les garanties et les non-objectifs explicites sont publiés dans
 [THREAT-MODEL.md](THREAT-MODEL.md). Signalez les vulnérabilités en privé selon SECURITY.md.
 
@@ -274,7 +274,7 @@ les versions signées. Le modèle d'adversaire complet, les garanties et les non
 
 Sotto est Apache-2.0 et accueille les contributions. Commencez par [CONTRIBUTING.md](CONTRIBUTING.md) ;
 les [good first issues](https://github.com/getsotto/sotto/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-sont étiquetés, et les questions qui ne sont pas des bogues vont dans
+sont étiquetées, et les questions qui ne sont pas des bogues vont dans
 [Discussions](https://github.com/getsotto/sotto/discussions).
 
 Signalez les vulnérabilités en privé selon [SECURITY.md](SECURITY.md).

@@ -7,8 +7,8 @@
 Sincronización de secretos con cifrado de extremo a extremo para equipos de desarrollo. Deja de enviar tu `.env` por Slack.
 
 > [!WARNING]
-> Sotto está antes de la versión 1.0 y **no** ha pasado una auditoría criptográfica independiente. Funciona de principio a fin, pero
-> aún no debería custodiar secretos críticos de producción. Consulta [SECURITY.md](SECURITY.md).
+> Sotto es una versión previa a la 1.0 y **no** ha pasado una auditoría criptográfica de terceros. Funciona de extremo a extremo, pero
+> aún no deberías confiarle secretos críticos de producción. Consulta [SECURITY.md](SECURITY.md).
 
 Sotto se basa en una única implementación criptográfica en Rust compartida por la CLI nativa y el cliente
 del navegador mediante WebAssembly. El servidor almacena y sincroniza datos cifrados sin recibir nunca
@@ -17,16 +17,16 @@ secretos en texto plano ni claves utilizables.
 ## Estado actual
 
 El flujo de extremo a extremo funciona: cifra en local, sincroniza texto cifrado, descifra en otro dispositivo o en el
-navegador, y comparte un único secreto con un enlace de un solo uso. Los equipos también funcionan de principio a fin: organizaciones
+navegador, y comparte un único secreto con un enlace de un solo uso. Los equipos también funcionan de extremo a extremo: organizaciones
 con roles, concesiones de entorno por miembro, rotación de claves al eliminar a un miembro, tokens de máquina para CI
 y recuperación de cuentas por pérdida de claves.
 
 | Componente | Disponible ahora |
 | --- | --- |
-| Núcleo criptográfico | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulado de claves, concesiones selladas X25519, la jerarquía de bóvedas de entorno, reencapsulado de claves de datos (rotación), criptografía de enlaces compartidos y codificación de claves, con vectores de referencia compartidos entre compilaciones nativas y WASM |
-| CLI | `init`, gestión local de secretos, inyección con `run`, sincronización `login`/`push`/`pull`, `setup` para dispositivos nuevos, `share`; equipos: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` de máquina (con modo `SOTTO_TOKEN` para CI), `reset` con kit de emergencia |
-| Servidor | Inicio de sesión OAuth + sesiones, sincronización de cuentas + instantáneas (escrituras versionadas, ETag), organizaciones + membresías + roles, concesiones de claves de bóveda por miembro, rotación transaccional de claves, tokens de máquina, restablecimiento de cuentas y enlaces compartidos, solo texto cifrado |
-| Web | Inicio de sesión (sesión con cookie), desbloqueo en el navegador + descifrado de la bóveda con tu propia concesión, creación y recepción de compartidos de un solo uso, y un panel de equipo: organizaciones, miembros, invitación por correo y compartición de un entorno con un miembro |
+| Núcleo criptográfico | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulado de claves, concesiones mediante sealed box X25519, la jerarquía de bóvedas de entorno, reencapsulado de claves de datos (rotación), criptografía de enlaces para compartir y codificación de claves, con vectores de referencia nativo↔WASM |
+| CLI | `init`, gestión local de secretos, inyección con `run`, sincronización `login`/`push`/`pull`, `setup` para dispositivos nuevos, `share`; equipos: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` de máquina (con modo `SOTTO_TOKEN` para CI), `reset` por pérdida del kit de emergencia |
+| Servidor | Inicio de sesión OAuth + sesiones, sincronización de cuentas + instantáneas (escrituras versionadas, ETag), organizaciones + membresías + roles, concesiones de claves de bóveda por miembro, rotación transaccional de claves, tokens de máquina, restablecimiento de cuentas y enlaces para compartir - solo texto cifrado |
+| Web | Inicio de sesión (sesión con cookie), desbloqueo en el navegador + descifrado de la bóveda con tu propia concesión, creación y recepción de enlaces de un solo uso, y un panel de equipo: organizaciones, miembros, invitación por correo y compartición de un entorno con un miembro |
 
 ## Instalación
 
@@ -41,16 +41,16 @@ curl -fsSL https://raw.githubusercontent.com/getsotto/sotto/main/install.sh | sh
 irm https://raw.githubusercontent.com/getsotto/sotto/main/install.ps1 | iex
 ```
 
-El instalador verifica la suma de comprobación SHA-256 del archivo, y su firma Sigstore cuando `cosign`
+El instalador verifica la suma de comprobación SHA-256 del archivo comprimido, y su firma Sigstore cuando `cosign`
 está instalado, antes de instalar (`~/.local/bin` en macOS/Linux, `%LOCALAPPDATA%\sotto\bin` en
-Windows). ¿Prefieres revisar antes? Descarga un archivo desde la
+Windows). ¿Prefieres revisar antes? Descarga un archivo comprimido desde la
 [página de versiones](https://github.com/getsotto/sotto/releases) y verifícalo manualmente según
 [SECURITY.md](SECURITY.md), o compila desde el código fuente (consulta [Desarrollo](#desarrollo)).
 
 ### GitHub Actions
 
 Para GitHub Actions, usa la [acción Sotto Setup](https://github.com/getsotto/sotto-action) para
-instalar una versión exacta de la CLI y verificar su suma de comprobación y sus paquetes Sigstore antes de dejar `sotto`
+instalar una versión exacta de la CLI y verificar su suma de comprobación y sus bundles Sigstore antes de dejar `sotto`
 disponible para los pasos siguientes:
 
 ```yaml
@@ -153,7 +153,7 @@ cargo run -p sotto-cli -- set DATABASE_URL     # hidden prompt
 cargo run -p sotto-cli -- run -- your-command  # inject secrets as env vars into a subprocess
 ```
 
-Los secretos se cifran en reposo en un almacén SQLite local; la clave maestra se guarda en el llavero del SO
+Los secretos se cifran en reposo en un almacén SQLite local; la clave maestra se almacena en caché en el llavero del SO
 con un TTL. Sincronizar con un servidor (`login`/`push`/`pull`/`setup`/`share`) es opcional.
 
 ### Ejecución del servidor
@@ -166,11 +166,11 @@ curl http://127.0.0.1:8080/health   # → ok
 ```
 
 El inicio de sesión con GitHub OAuth requiere `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. Para cualquier despliegue no local
-define también `SOTTO_PUBLIC_URL` con el origen público del servidor: construye la
-URL de retorno de GitHub y debe coincidir con la registrada en la app OAuth (si no, usa
-`http://localhost:8080`); y, para el cliente web, `SOTTO_WEB_ORIGIN`. Sin OAuth el servidor
+define también `SOTTO_PUBLIC_URL` con el origen del servidor accesible desde fuera (construye la
+URL de callback de GitHub y debe coincidir con la registrada en la app OAuth; si no, se usa
+`http://localhost:8080`) y, para el cliente web, `SOTTO_WEB_ORIGIN`. Sin OAuth el servidor
 sigue arrancando (sirve `/health` y ejecuta las migraciones), pero el inicio de sesión y todos los endpoints autenticados
-(sincronización, creación de compartidos) no están disponibles.
+(sincronización, creación de enlaces para compartir) no están disponibles.
 
 ### Cliente web
 
@@ -209,7 +209,7 @@ La política de cadena de suministro se define en `deny.toml` y se comprueba en 
 cargo deny check
 ```
 
-La auditoría completa del lockfile también se ejecuta en el trabajo `supply-chain` de CI (requiere Python 3.11+):
+La auditoría completa del lockfile también se ejecuta en el job `supply-chain` de CI (requiere Python 3.11+):
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -217,20 +217,20 @@ python3 -B -m unittest discover -s scripts/tests -v
 scripts/check-cargo-audit
 ```
 
-La [política de auditoría](.ci/cargo-audit-policy.toml) registra excepciones exactas para las entradas dormidas `rsa` y
-`spin` del lockfile. Cada una debe coincidir en paquete, versión, registro y hallazgo, y no tener
-ruta de dependencia normal, de compilación ni de pruebas en ningún destino, con las features por defecto y todas las del espacio de trabajo.
-Nuevos hallazgos, identidades cambiadas, paquetes alcanzables, análisis fallidos y excepciones obsoletas hacen fallar CI.
-Elimina una excepción en el mismo PR que elimine su hallazgo; una lista de excepciones vacía requiere una
-auditoría limpia. `cargo audit` sin más sigue reportando estos hallazgos: esta política documenta y verifica
-su latencia, y no afirma que las versiones vulnerables o retiradas se hayan corregido.
-Los [valores de auditoría](.cargo/audit.toml) del proyecto mantienen activas la obtención de avisos y las comprobaciones de retiradas, y
-anulan la configuración global de auditoría del desarrollador. No añadas ignorados de avisos ni filtros de análisis.
-El comprobador también ejecuta una auditoría con formato de terminal para detectar fallos de registro que cargo-audit 0.22.2
-puede omitir en la salida JSON, de modo que un análisis de paquetes retirados no disponible no cuente como resultado limpio.
+La [política de auditoría](.ci/cargo-audit-policy.toml) registra excepciones exactas para las entradas inactivas `rsa` y
+`spin` del lockfile. Cada una debe coincidir en paquete, versión, registro y hallazgo, y no tener ruta de dependencia normal,
+de compilación ni de pruebas en ningún destino, con las features por defecto y todas las del espacio de trabajo. Nuevos
+hallazgos, identidades cambiadas, paquetes alcanzables, análisis fallidos y excepciones obsoletas hacen fallar CI. Elimina
+una excepción en el mismo PR que elimine su hallazgo; una lista de excepciones vacía requiere una auditoría limpia.
+`cargo audit` a secas sigue reportando estos hallazgos: esta política documenta y verifica que esas entradas siguen inactivas, y no
+afirma que las versiones vulnerables o retiradas se hayan corregido. Los [valores de auditoría](.cargo/audit.toml) del
+proyecto mantienen activas la obtención de avisos y las comprobaciones de versiones retiradas, y anulan la configuración
+global de auditoría del desarrollador. No añadas exclusiones de avisos ni filtros de análisis. El comprobador también ejecuta
+una auditoría con formato de terminal para detectar fallos de registro que cargo-audit 0.22.2 puede omitir en la salida JSON,
+de modo que un análisis de paquetes retirados no disponible no cuente como resultado limpio.
 
-La puerta entre implementaciones demuestra que las compilaciones nativa y WASM coinciden: el texto cifrado producido en nativo
-descifra byte a byte en WASM a partir de vectores de referencia compartidos:
+El control cruzado entre implementaciones demuestra que las compilaciones nativa y WASM coinciden: el texto cifrado producido en nativo
+se descifra byte a byte en WASM a partir de vectores de referencia compartidos:
 
 ```sh
 wasm-pack test --node crates/wasm
@@ -243,9 +243,9 @@ La compilación web y su auditoría de dependencias se ejecutan en CI (`.github/
 El **servidor** envía un ping anónimo al día (en los primeros 10-20 minutos tras el arranque) a
 `https://getsotto.co.uk/telemetry/v1/ping`, para contar instancias activas y ver qué
 versiones están en uso. La respuesta nombra la última versión, y el servidor registra una línea cuando
-ejecuta una versión desactualizada. Esta es la carga **completa**: el código de envío está en
+ejecuta una versión desactualizada. Esta es la carga útil **completa**: el código de envío está en
 [`crates/server/src/telemetry.rs`](crates/server/src/telemetry.rs), y una prueba unitaria fija
-la carga a exactamente estos cuatro campos:
+la carga útil en exactamente estos cuatro campos:
 
 ```json
 { "instance_id": "0d0972a6-…", "version": "0.2.0", "os": "linux", "arch": "x86_64" }
@@ -256,18 +256,18 @@ así que no identifica hardware, equipo ni cuenta; eliminarlo convierte la insta
 nuevo. El lado de ingesta no guarda direcciones IP ni ubicación derivada. No hay conteos de organizaciones, miembros
 ni secretos, ni eventos de uso. La **CLI, el cliente web y WASM nunca envían nada**.
 
-Desactívalo con `SOTTO_TELEMETRY=off` (o la variable común
+Desactívalo con `SOTTO_TELEMETRY=off` (o la variable común a varias herramientas
 [`DO_NOT_TRACK=1`](https://consoledonottrack.com)): cuando está desactivado la tarea nunca se inicia y
 nunca se hace ninguna petición. `SOTTO_TELEMETRY_URL` redirige el ping (por ejemplo, para agregar una flota privada),
-y los registros inactivos de 12 meses se purgan del censo alojado.
+y los registros que llevan 12 meses inactivos se purgan del censo alojado.
 
 ## Seguridad
 
-El modelo de Sotto es de conocimiento cero: los secretos en texto plano y las claves de descifrado utilizables permanecen en los
-dispositivos cliente, y el servidor solo ve texto cifrado más metadatos mínimos. Esto está implementado pero aún **no
+El modelo de Sotto es de conocimiento cero: los secretos en texto plano y las claves de descifrado utilizables permanecen en
+los dispositivos cliente, y el servidor solo ve texto cifrado más metadatos mínimos. Esto está implementado pero aún **no
 auditado de forma independiente**: consulta [SECURITY.md](SECURITY.md) para el modelo, la exposición honesta de metadatos,
-cómo se refuerza la superficie web (obtenida de nuevo, más débil) y cómo verificar las versiones firmadas.
-El modelo de adversario completo, las garantías y los no objetivos explícitos están publicados en
+cómo se refuerza la superficie web (que se vuelve a descargar en cada visita y es, por tanto, más débil) y cómo verificar las
+versiones firmadas. El modelo de adversario completo, las garantías y los no objetivos explícitos están publicados en
 [THREAT-MODEL.md](THREAT-MODEL.md). Reporta vulnerabilidades en privado según SECURITY.md.
 
 ## Contribución

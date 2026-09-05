@@ -7,8 +7,8 @@
 Sincronização de segredos com criptografia de ponta a ponta para equipes de desenvolvimento. Pare de enviar seu `.env` pelo Slack.
 
 > [!WARNING]
-> O Sotto está antes da versão 1.0 e **não** passou por uma auditoria criptográfica independente. Funciona de ponta a ponta, mas
-> ainda não deve guardar segredos críticos de produção. Consulte [SECURITY.md](SECURITY.md).
+> O Sotto é pré-1.0 e **não** passou por uma auditoria criptográfica de terceiros. Funciona de ponta a ponta, mas
+> você ainda não deve confiar a ele segredos críticos de produção. Consulte [SECURITY.md](SECURITY.md).
 
 O Sotto se baseia em uma única implementação criptográfica em Rust compartilhada pela CLI nativa e pelo cliente
 do navegador via WebAssembly. O servidor armazena e sincroniza dados criptografados sem nunca receber
@@ -23,10 +23,10 @@ e recuperação de conta por perda de chaves.
 
 | Componente | Disponível agora |
 | --- | --- |
-| Núcleo criptográfico | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulamento de chaves, concessões seladas X25519, a hierarquia de cofres de ambiente, reencapsulamento de chaves de dados (rotação), criptografia de links de compartilhamento e codificação de chaves, com vetores de referência compartilhados entre builds nativas e WASM |
-| CLI | `init`, gerenciamento local de segredos, injeção com `run`, sincronização `login`/`push`/`pull`, `setup` para novos dispositivos, `share`; equipes: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` de máquina (com modo `SOTTO_TOKEN` para CI), `reset` com kit de emergência |
-| Servidor | Login OAuth + sessões, sincronização de conta + snapshots (escritas versionadas, ETag), organizações + membros + papéis, concessões de chaves de cofre por membro, rotação transacional de chaves, tokens de máquina, redefinição de conta e links de compartilhamento, só texto cifrado |
-| Web | Login (sessão com cookie), desbloqueio no navegador + descriptografia do cofre com sua própria concessão, criação e recebimento de compartilhamentos de uso único, e um painel de equipe: organizações, membros, convite por e-mail, compartilhamento de um ambiente com um membro |
+| Núcleo criptográfico | KDF, AEAD XChaCha20-Poly1305 + AAD, encapsulamento de chaves, concessões via sealed box X25519, a hierarquia de cofres de ambiente, reencapsulamento de chaves de dados (rotação), criptografia de links de compartilhamento e codificação de chaves, com vetores de referência nativo↔WASM |
+| CLI | `init`, gerenciamento local de segredos, injeção com `run`, sincronização `login`/`push`/`pull`, `setup` para novos dispositivos, `share`; equipes: `org create/ls/invite/members/remove`, `grant`, `clone`, `rotate`, `token create/ls/revoke` de máquina (com modo `SOTTO_TOKEN` para CI), `reset` para kit de emergência perdido |
+| Servidor | Login OAuth + sessões, sincronização de conta + snapshots (escritas versionadas, ETag), organizações + membros + papéis, concessões de chaves de cofre por membro, rotação transacional de chaves, tokens de máquina, redefinição de conta e links de compartilhamento - apenas texto cifrado |
+| Web | Login (sessão com cookie), desbloqueio no navegador + descriptografia do cofre com sua própria concessão, criação e recebimento de links de uso único, e um painel de equipe: organizações, membros, convite por e-mail, compartilhamento de um ambiente com um membro |
 
 ## Instalação
 
@@ -41,16 +41,16 @@ curl -fsSL https://raw.githubusercontent.com/getsotto/sotto/main/install.sh | sh
 irm https://raw.githubusercontent.com/getsotto/sotto/main/install.ps1 | iex
 ```
 
-O instalador verifica a soma de verificação SHA-256 do pacote, e sua assinatura Sigstore quando `cosign`
+O instalador verifica a soma de verificação SHA-256 do arquivo compactado, e sua assinatura Sigstore quando `cosign`
 está instalado, antes de instalar (`~/.local/bin` no macOS/Linux, `%LOCALAPPDATA%\sotto\bin` no
-Windows). Prefere conferir antes? Baixe um pacote na
+Windows). Prefere conferir antes? Baixe um arquivo compactado na
 [página de releases](https://github.com/getsotto/sotto/releases) e verifique manualmente conforme
 [SECURITY.md](SECURITY.md), ou compile do código-fonte (consulte [Desenvolvimento](#desenvolvimento)).
 
 ### GitHub Actions
 
 Para GitHub Actions, use a [action Sotto Setup](https://github.com/getsotto/sotto-action) para
-instalar uma versão exata da CLI e verificar sua soma de verificação e pacotes Sigstore antes de deixar o `sotto`
+instalar uma versão exata da CLI e verificar sua soma de verificação e bundles Sigstore antes de deixar o `sotto`
 disponível para as etapas seguintes:
 
 ```yaml
@@ -68,8 +68,8 @@ jobs:
           SOTTO_TOKEN: ${{ secrets.SOTTO_TOKEN }}
 ```
 
-A referência da action e `sotto-version` são independentes. O exemplo fixa a implementação v1.1 incorporada
-pelo SHA completo do commit porque ainda não foi publicada uma release numerada da action. Mantenha
+A referência da action e `sotto-version` são independentes. O exemplo fixa, pelo SHA completo do commit, a implementação v1.1
+incorporada porque ainda não foi publicada uma release numerada da action. Mantenha
 `sotto-version` como uma versão exata `vX.Y.Z`. Defina a variável de repositório opcional `SOTTO_SERVER`
 para um servidor auto-hospedado. Consulte a [documentação da action](https://github.com/getsotto/sotto-action#readme)
 para exemplos de matriz, Windows e workflows reutilizáveis.
@@ -152,7 +152,7 @@ cargo run -p sotto-cli -- set DATABASE_URL     # hidden prompt
 cargo run -p sotto-cli -- run -- your-command  # inject secrets as env vars into a subprocess
 ```
 
-Os segredos ficam criptografados em repouso em um banco SQLite local; a chave mestra fica no chaveiro do SO
+Os segredos ficam criptografados em repouso em um banco SQLite local; a chave mestra fica em cache no chaveiro do SO
 com um TTL. Sincronizar com um servidor (`login`/`push`/`pull`/`setup`/`share`) é opcional.
 
 ### Executando o servidor
@@ -165,10 +165,10 @@ curl http://127.0.0.1:8080/health   # → ok
 ```
 
 O login com GitHub OAuth requer `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. Para qualquer deploy não local,
-defina também `SOTTO_PUBLIC_URL` como a origem pública do servidor: ela monta a URL de callback do GitHub
+defina também `SOTTO_PUBLIC_URL` como a origem externamente acessível do servidor: ela monta a URL de callback do GitHub
 e precisa ser igual ao callback registrado no app OAuth (o padrão é `http://localhost:8080`); e, para o cliente
 web, `SOTTO_WEB_ORIGIN`. Sem OAuth o servidor continua subindo (serve `/health` e roda as migrations), mas o login
-e todos os endpoints autenticados (sync, criação de compartilhamentos) ficam indisponíveis.
+e todos os endpoints autenticados (sincronização, criação de compartilhamentos) ficam indisponíveis.
 
 ### Cliente web
 
@@ -216,19 +216,19 @@ scripts/check-cargo-audit
 ```
 
 A [política de auditoria](.ci/cargo-audit-policy.toml) registra exceções exatas para as entradas adormecidas `rsa` e
-`spin` do lockfile. Cada uma precisa bater em pacote, versão, registro e achado, e não ter nenhum caminho de dependência
+`spin` do lockfile. Cada uma precisa corresponder ao pacote, à versão, ao registro e ao achado, e não ter nenhum caminho de dependência
 normal, de build ou de teste em nenhum target, com as features padrão e todas as do workspace. Novos achados, identidades
 alteradas, pacotes alcançáveis, varreduras com falha e exceções obsoletas quebram o CI. Remova uma exceção no mesmo PR que
 remover seu achado; uma lista de exceções vazia exige uma auditoria limpa. O `cargo audit` puro continua relatando esses
-achados: esta política documenta e verifica sua dormência, e não afirma que as releases vulneráveis ou retiradas foram
+achados: esta política documenta e verifica que eles permanecem adormecidos, e não afirma que as releases vulneráveis ou retiradas foram
 corrigidas. Os [padrões de auditoria](.cargo/audit.toml) do projeto mantêm a busca de advisories e as verificações de
 retiradas ativadas e sobrescrevem a configuração global de auditoria do desenvolvedor. Não adicione ignorados de advisories
 nem filtros de varredura. O verificador também roda uma auditoria em formato de terminal para detectar falhas de registro que
 o cargo-audit 0.22.2 pode omitir na saída JSON, para que uma varredura indisponível de pacotes retirados não conte como
 resultado limpo.
 
-O portão entre implementações prova que os builds nativo e WASM concordam: texto cifrado produzido no nativo
-descriptografa byte a byte no WASM a partir de vetores de referência compartilhados:
+A verificação cruzada entre implementações prova que os builds nativo e WASM concordam: texto cifrado produzido no nativo
+é descriptografado byte a byte no WASM a partir de vetores de referência compartilhados:
 
 ```sh
 wasm-pack test --node crates/wasm
@@ -254,18 +254,18 @@ hardware, host ou conta; apagá-lo transforma a instância em um contador anôni
 endereços IP nem localização derivada. Sem contagens de orgs, membros ou segredos, e sem eventos de uso.
 A **CLI, o cliente web e o WASM nunca enviam nada**.
 
-Opte por sair com `SOTTO_TELEMETRY=off` (ou o [`DO_NOT_TRACK=1`](https://consoledonottrack.com) válido para todas as
-ferramentas): desativada, a tarefa nunca é iniciada e nenhuma requisição é feita. `SOTTO_TELEMETRY_URL` redireciona o ping
-(por exemplo, para agregar uma frota privada), e registros inativos há 12 meses são expurgados do censo hospedado.
+Desative com `SOTTO_TELEMETRY=off` (ou o [`DO_NOT_TRACK=1`](https://consoledonottrack.com) válido para todas as
+ferramentas): quando a telemetria está desativada, a tarefa nunca é iniciada e nenhuma requisição é feita. `SOTTO_TELEMETRY_URL` redireciona o ping
+(por exemplo, para agregar uma frota privada), e registros que estão inativos há 12 meses são expurgados do censo hospedado.
 
 ## Segurança
 
 O modelo do Sotto é de conhecimento zero: segredos em texto puro e chaves de descriptografia utilizáveis ficam nos
-dispositivos cliente, e o servidor vê só texto cifrado mais metadados mínimos. Isto está implementado, mas **ainda não
-auditado de forma independente**: consulte [SECURITY.md](SECURITY.md) para o modelo, a exposição honesta de metadados,
-como a superfície web (recarregada, mais fraca) é reforçada e como verificar releases assinadas. O modelo completo de
-adversários, garantias e não objetivos explícitos está publicado em [THREAT-MODEL.md](THREAT-MODEL.md). Relate
-vulnerabilidades em privado conforme SECURITY.md.
+dispositivos cliente, e o servidor vê apenas texto cifrado mais metadados mínimos. Isso está implementado, mas **ainda não
+auditado de forma independente**: consulte [SECURITY.md](SECURITY.md) para o modelo, a exposição honesta de metadados, como a
+superfície web (baixada de novo a cada visita e, por isso, mais fraca) é reforçada e como verificar releases assinadas. O
+modelo completo de adversários, garantias e não objetivos explícitos está publicado em [THREAT-MODEL.md](THREAT-MODEL.md).
+Relate vulnerabilidades em privado conforme SECURITY.md.
 
 ## Contribuindo
 
