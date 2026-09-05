@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Verify translated READMEs stay structurally in sync with README.md.
+
+Translations may change prose only. Commands, code blocks, URLs, link
+destinations (except same-page anchors and the language nav bar), inline-code
+spans, heading structure, tables, and admonition markers must match the
+English original exactly. English (README.md) is authoritative.
+
+Usage: scripts/check-readme-i18n [--root PATH]
+"""
+
+import argparse
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+SOURCE = "README.md"
+TRANSLATIONS = ("README.es.md", "README.fr.md", "README.de.md", "README.pt-BR.md")
+NAV_FILES = frozenset((SOURCE,) + TRANSLATIONS)
+
+FENCE_RE = re.compile(r"^```")
+HEADING_RE = re.compile(r"^(#{1,6})\s")
+URL_RE = re.compile(r"https?://[^\s)<>\]`\"']+")
+LINK_DST_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
+CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+
+
+def read(path):
+    return Path(path).read_text(encoding="utf-8")
+
+
+def fenced_blocks(text):
+    """Return [(fence_line, content_tuple)] for every fenced code block."""
+    blocks, current, fence = [], None, None
+    for line in text.splitlines():
+        if FENCE_RE.match(line):
+            if current is None:
+                current, fence = [], line.strip()
+            else:
+                blocks.append((fence, tuple(current)))
+                current, fence = None, None
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        raise ValueError("unclosed fenced code block")
+    return blocks
+
+
+def strip_fenced(text):
+    out, in_fence = [], False
+    for line in text.splitlines():
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            out.append(line)
+    return "\n".join(out)
+
+
+def urls(text):
+    return Counter(u.rstrip(".,;:!?)") for u in URL_RE.findall(text))
+
+
+def link_destinations(text):
+    """Non-fragment, non-nav link destinations (translated anchors and the
+    language nav bar legitimately differ between files)."""
+    dsts = []
+    for dst in LINK_DST_RE.findall(text):
+        if dst.startswith("#"):
+            continue
+        if dst.split("#")[0] in NAV_FILES:
+            continue
+        dsts.append(dst)
+    return Counter(dsts)
+
+
+def code_spans(text):
+    return Counter(CODE_SPAN_RE.findall(strip_fenced(text)))
+
+
+def heading_levels(text):
+    levels = []
+    for line in text.splitlines():
+        match = HEADING_RE.match(line)
+        if match:
+            levels.append(len(match.group(1)))
+    return levels
+
+
+def table_rows(text):
+    return sum(1 for line in text.splitlines() if line.startswith("|"))
+
+
+def admonitions(text):
+    return text.count("[!WARNING]")
+
+
+def check_translation(source_text, trans_text, name):
+    errors = []
+    if fenced_blocks(source_text) != fenced_blocks(trans_text):
+        errors.append(f"{name}: fenced code blocks differ from {SOURCE} (must be byte-identical)")
+    if urls(source_text) != urls(trans_text):
+        errors.append(f"{name}: URLs differ from {SOURCE}")
+    if link_destinations(source_text) != link_destinations(trans_text):
+        errors.append(f"{name}: link destinations differ from {SOURCE}")
+    if code_spans(source_text) != code_spans(trans_text):
+        only_src = code_spans(source_text) - code_spans(trans_text)
+        only_tr = code_spans(trans_text) - code_spans(source_text)
+        errors.append(
+            f"{name}: inline code spans differ from {SOURCE} "
+            f"(missing {sorted(only_src)!r}, added {sorted(only_tr)!r})"
+        )
+    if heading_levels(source_text) != heading_levels(trans_text):
+        errors.append(f"{name}: heading structure differs from {SOURCE}")
+    if table_rows(source_text) != table_rows(trans_text):
+        errors.append(f"{name}: table row count differs from {SOURCE}")
+    if admonitions(source_text) != admonitions(trans_text):
+        errors.append(f"{name}: admonition markers differ from {SOURCE}")
+    if f"({SOURCE})" not in trans_text:
+        errors.append(f"{name}: missing link back to {SOURCE}")
+    return errors
+
+
+def check_root(root):
+    root = Path(root)
+    errors = []
+    try:
+        source_text = read(root / SOURCE)
+    except OSError as exc:
+        return [f"{SOURCE}: cannot read ({exc})"]
+    for name in TRANSLATIONS:
+        if f"({name})" not in source_text:
+            errors.append(f"{SOURCE}: missing nav link to {name}")
+        try:
+            trans_text = read(root / name)
+        except OSError:
+            errors.append(f"{name}: file missing")
+            continue
+        errors.extend(check_translation(source_text, trans_text, name))
+    return errors
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Check README translations are in sync.")
+    parser.add_argument("--root", default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args(argv)
+    errors = check_root(args.root)
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print(f"README i18n OK: {len(TRANSLATIONS)} translations in sync with {SOURCE}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
