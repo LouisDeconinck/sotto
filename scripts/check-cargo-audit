@@ -66,6 +66,15 @@ def reject_json_constant(value):
     raise ValueError(f"invalid JSON constant: {value}")
 
 
+def is_lock_wait(line):
+    # The pinned tool retries after this warning. A failed retry still produces
+    # an error or incomplete report, both of which the caller rejects.
+    return re.fullmatch(
+        r"warning: directory .+ is locked, waiting for up to 300 seconds for it to become available",
+        line.strip(),
+    ) is not None
+
+
 def parse_report(audit):
     try:
         report = json.loads(audit.stdout, object_pairs_hook=unique_json_object,
@@ -157,7 +166,7 @@ def verify_registry_scan(root, findings):
         if count:
             expected.add(f"error: {count} {singular if count == 1 else plural} found!")
     diagnostics = {line.strip() for line in output.splitlines()
-                   if line.strip().startswith(("error:", "warning:"))}
+                   if line.strip().startswith(("error:", "warning:")) and not is_lock_wait(line)}
     if diagnostics != expected:
         raise PolicyError(f"cargo audit registry diagnostics or findings changed:\n{output.strip()}")
 
@@ -168,16 +177,18 @@ def check(root):
     # outdated lockfile must not omit dependencies newly added to manifests.
     check_dormant(root, {f'{e["package"]}@{e["version"]}' for e in allowed.values()})
     audit = subprocess.run(
-        ["cargo", "audit", "--json", "--deny", "warnings", "--file", str(root / "Cargo.lock")],
+        ["cargo", "audit", "--json", "--color", "never", "--deny", "warnings",
+         "--file", str(root / "Cargo.lock")],
         cwd=root, capture_output=True, text=True, timeout=300,
     )
-    # Exit 1 means findings, not a broken scan. Operational errors use exit 2.
+    # Exit 1 can mean findings or an operational failure; validate diagnostics
+    # and report completeness as well as the process status.
     if audit.returncode not in (0, 1):
         raise PolicyError(f"cargo audit failed ({audit.returncode}): {audit.stderr.strip()}")
     # cargo-audit 0.22.2 may emit per-package yanked lookup errors on stderr and
     # still return a valid JSON report with status 0/1. JSON mode is otherwise
-    # silent there; diagnostics mean we cannot establish that the scan completed.
-    if audit.stderr.strip():
+    # silent there except for recoverable lock waits.
+    if any(line.strip() and not is_lock_wait(line) for line in audit.stderr.splitlines()):
         raise PolicyError(f"cargo audit emitted diagnostics; scan may be incomplete:\n{audit.stderr.strip()}")
     findings = parse_report(audit)
     unexpected = findings - allowed.keys()

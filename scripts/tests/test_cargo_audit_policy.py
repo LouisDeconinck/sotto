@@ -176,6 +176,15 @@ class PolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(checker.PolicyError, "registry diagnostics"):
             self.check()
 
+    def test_recovered_lock_wait_is_allowed_only_with_a_complete_scan(self):
+        warning = "warning: directory /tmp/advisory-db is locked, waiting for up to 300 seconds for it to become available\n"
+        self.audit_stderr = warning
+        self.registry_diagnostic = warning
+        self.check()
+        self.audit_stderr += "error: couldn't check if the package is yanked: network error\n"
+        with self.assertRaisesRegex(checker.PolicyError, "diagnostics"):
+            self.check()
+
     def test_missing_finding_requires_exception_removal(self):
         self.audit_report["warnings"] = {}
         with self.assertRaisesRegex(checker.PolicyError, "stale"):
