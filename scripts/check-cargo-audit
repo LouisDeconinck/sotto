@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Accept exact audit findings only while Cargo proves their packages dormant.
 
-Requires Python 3.11+ and cargo-audit 0.22.2. Run from any directory.
+Usage: scripts/check-cargo-audit (from the repository root), or an absolute path
+to this script from any directory. No arguments are accepted.
+Requires Python 3.11 or newer (CI uses 3.12) and cargo-audit exactly 0.22.2.
+Exit 0: policy satisfied. Exit 1: rejected findings, invalid input or failed scan.
+
+Python's standard library provides TOML/JSON parsing, strict schema validation and
+subprocess handling. POSIX sh would require additional parsers and more fragile
+text plumbing for those tasks. No third-party Python packages are required.
 """
 
 import json
@@ -49,7 +56,9 @@ def load_policy(root):
         identities = {(p["version"], p.get("source")) for p in lock["package"]
                       if p["name"] == entry["package"]}
         if identities != {(entry["version"], entry["source"])}:
-            raise PolicyError(f'lockfile changed for {entry["package"]}; remove or review its policy entry')
+            raise PolicyError(
+                f'lockfile changed for {entry["package"]}; remove or review its policy entry'
+            )
     return allowed
 
 
@@ -67,10 +76,12 @@ def reject_json_constant(value):
 
 
 def is_lock_wait(line):
-    # The pinned tool retries after this warning. A failed retry still produces
-    # an error or incomplete report, both of which the caller rejects.
+    # This warning says only that a retry started. JSON mode can hide its failure.
+    # Acceptance depends on verify_registry_scan's independent terminal scan;
+    # neither this warning nor structurally valid JSON proves scan completeness.
     return re.fullmatch(
-        r"warning: directory .+ is locked, waiting for up to 300 seconds for it to become available",
+        r"warning: directory .+ is locked, waiting for up to 300 seconds "
+        r"for it to become available",
         line.strip(),
     ) is not None
 
@@ -85,9 +96,10 @@ def parse_report(audit):
         if any(type(count) is not int or count <= 0 for count in counts):
             raise ValueError("empty advisory database or lockfile")
         settings = report["settings"]
+        informational = {"unmaintained", "unsound", "notice"}
         if (settings["ignore"] != [] or settings["target_arch"] != []
                 or settings["target_os"] != [] or settings["severity"] is not None
-                or set(settings["informational_warnings"]) != {"unmaintained", "unsound", "notice"}):
+                or set(settings["informational_warnings"]) != informational):
             raise PolicyError("filtered audit report; remove ignored advisories or scan filters")
         vulnerabilities = report["vulnerabilities"]
         if (not isinstance(vulnerabilities["list"], list)
@@ -106,7 +118,8 @@ def parse_report(audit):
                 if warning["kind"] != kind:
                     raise ValueError("inconsistent warning kind")
                 advisory = warning["advisory"]
-                findings.add(finding_key(kind, warning["package"], advisory["id"] if advisory else kind))
+                finding = advisory["id"] if advisory else kind
+                findings.add(finding_key(kind, warning["package"], finding))
         if bool(findings) != (audit.returncode == 1):
             raise ValueError("exit status disagrees with findings")
         return findings
@@ -147,6 +160,8 @@ def check_dormant(root, packages):
 def verify_registry_scan(root, findings):
     # In 0.22.2 JSON mode silently hides failure to initialise the registry index.
     # A terminal pass exposes that failure, including when no yanks were reported.
+    # This is an independent full scan, not proof that the earlier JSON scan
+    # completed. Require exact finding identities as well as diagnostic counts.
     # Keep this check when removing the last dormant exception.
     scan = subprocess.run(
         ["cargo", "audit", "--format", "terminal", "--color", "never", "--deny", "warnings",
@@ -168,14 +183,54 @@ def verify_registry_scan(root, findings):
     diagnostics = {line.strip() for line in output.splitlines()
                    if line.strip().startswith(("error:", "warning:")) and not is_lock_wait(line)}
     if diagnostics != expected:
-        raise PolicyError(f"cargo audit registry diagnostics or findings changed:\n{output.strip()}")
+        raise PolicyError(
+            f"cargo audit registry diagnostics or findings changed:\n{output.strip()}"
+        )
+    # Terminal reports do not include the package source. load_policy checks
+    # every excepted package's exact source in the lockfile before either scan.
+    terminal_findings = set()
+    for block in re.split(r"(?m)^Crate:\s*", scan.stdout)[1:]:
+        lines = block.splitlines()
+        name = lines[0].strip()
+        fields = {}
+        for line in lines[1:]:
+            match = re.fullmatch(r"(Version|ID|Warning):\s*(\S+)\s*", line)
+            if match:
+                if match[1] in fields:
+                    raise PolicyError("duplicate terminal finding field")
+                fields[match[1]] = match[2]
+        if "Version" not in fields or not ({"ID", "Warning"} & fields.keys()):
+            raise PolicyError("incomplete terminal finding")
+        kind = fields.get("Warning", "vulnerability")
+        finding = fields.get("ID", kind)
+        identity = (kind, name, fields["Version"], finding)
+        if identity in terminal_findings:
+            raise PolicyError("duplicate terminal finding")
+        terminal_findings.add(identity)
+    expected_findings = {(kind, name, version, finding)
+                         for kind, name, version, source, finding in findings}
+    if terminal_findings != expected_findings:
+        raise PolicyError("terminal finding identities differ from JSON; repeat the complete check")
+
+
+def check_audit_version(root):
+    version = subprocess.run(
+        ["cargo", "audit", "--version"], cwd=root,
+        capture_output=True, text=True, timeout=30,
+    )
+    if (version.returncode != 0 or version.stderr.strip()
+            or version.stdout.strip() != "cargo-audit-audit 0.22.2"):
+        raise PolicyError("cargo-audit 0.22.2 required; run cargo install cargo-audit "
+                          "--version 0.22.2 --locked")
 
 
 def check(root):
+    lock_before = (root / "Cargo.lock").read_bytes()
     allowed = load_policy(root)
     # Resolve even after the last exception is removed: a clean scan of an
     # outdated lockfile must not omit dependencies newly added to manifests.
     check_dormant(root, {f'{e["package"]}@{e["version"]}' for e in allowed.values()})
+    check_audit_version(root)
     audit = subprocess.run(
         ["cargo", "audit", "--json", "--color", "never", "--deny", "warnings",
          "--file", str(root / "Cargo.lock")],
@@ -189,7 +244,9 @@ def check(root):
     # still return a valid JSON report with status 0/1. JSON mode is otherwise
     # silent there except for recoverable lock waits.
     if any(line.strip() and not is_lock_wait(line) for line in audit.stderr.splitlines()):
-        raise PolicyError(f"cargo audit emitted diagnostics; scan may be incomplete:\n{audit.stderr.strip()}")
+        raise PolicyError(
+            f"cargo audit emitted diagnostics; scan may be incomplete:\n{audit.stderr.strip()}"
+        )
     findings = parse_report(audit)
     unexpected = findings - allowed.keys()
     if unexpected:
@@ -198,6 +255,8 @@ def check(root):
     if stale:
         raise PolicyError(f"stale exceptions; remove or re-evaluate: {sorted(stale)}")
     verify_registry_scan(root, findings)
+    if (root / "Cargo.lock").read_bytes() != lock_before:
+        raise PolicyError("lockfile changed during auditing; repeat the complete check")
 
     for entry in allowed.values():
         package = f'{entry["package"]}@{entry["version"]}'
@@ -207,7 +266,11 @@ def check(root):
 
 if __name__ == "__main__":
     try:
+        if len(sys.argv) != 1:
+            raise PolicyError("usage: scripts/check-cargo-audit (no arguments)")
         check(Path(__file__).resolve().parents[1])
-    except (PolicyError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+    except (
+        PolicyError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError
+    ) as error:
         print(f"cargo audit policy failed: {error}", file=sys.stderr)
         sys.exit(1)
