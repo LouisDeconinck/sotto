@@ -91,6 +91,23 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+## Translating the README
+
+The root README ships in English plus translations. English (`README.md`) is
+authoritative and wins on any discrepancy; each translation says so in its header.
+
+- Available now: Español (`README.es.md`), Français (`README.fr.md`), Deutsch
+  (`README.de.md`), Português (BR) (`README.pt-BR.md`).
+- Translate prose only. Keep fenced code blocks, commands, identifiers, URLs,
+  link destinations, inline code, heading levels, tables, and admonition markers
+  exactly as in the English file.
+- Keep the language nav bar at the top of every README file, and link a new
+  translation from all of them.
+- Run `scripts/check-readme-i18n` before opening a PR; CI runs it with its unit
+  tests. To add a language, register the file in `TRANSLATIONS` in that script.
+- Translations are best-effort: reviewers fluent in the language are welcome,
+  especially for the security wording.
+
 ## Tests
 
 - Add tests for new behaviour and regressions.

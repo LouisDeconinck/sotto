@@ -25,6 +25,18 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  readme-i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: README translations in sync
+        run: scripts/check-readme-i18n
+      - name: README i18n checker tests
+        run: python3 -B -m unittest discover -s scripts/tests -p "test_readme_i18n.py" -v
+
   action-consumer:
     name: action consumer (${{ matrix.os }})
     strategy:

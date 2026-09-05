@@ -1,3 +1,5 @@
+[English](README.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Português (BR)](README.pt-BR.md)
+
 # Sotto
 
 End-to-end encrypted secret sync for developer teams. Stop Slacking your `.env`.
