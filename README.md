@@ -72,6 +72,11 @@ for matrix, Windows, and reusable-workflow examples.
 
 ## Quick start
 
+Want a runnable demo? [**sotto-example**](https://github.com/getsotto/sotto-example)
+walks through local secret injection with a Python GIF and copyable steps, plus tiny examples
+in JavaScript, TypeScript, Java, C#, PHP, Go, and C++. No account required; instructions cover
+macOS, Linux, and Windows.
+
 ```sh
 sotto init                   # create your identity + first project - SAVE the printed Emergency Kit
 sotto set DATABASE_URL       # hidden prompt; encrypted locally before it ever touches disk
@@ -217,6 +222,8 @@ clean audit. Raw `cargo audit` still reports these findings: this policy documen
 their dormancy, and does not claim the vulnerable/yanked releases have been fixed.
 Project [audit defaults](.cargo/audit.toml) keep advisory fetching and yanked checks enabled and
 override a developer's global audit configuration. Do not add advisory ignores or scan filters.
+The checker also runs a terminal-format audit to detect registry failures that cargo-audit 0.22.2
+can omit from JSON output, so an unavailable yanked-package scan cannot count as a clean result.
 
 The cross-implementation gate proves the native and WASM builds agree - native-produced ciphertext
 decrypts byte-for-byte in WASM from shared golden vectors:

@@ -9,3 +9,7 @@ ignore = []
 
 [yanked]
 enabled = true
+update_index = true
+
+[output]
+quiet = false

@@ -53,12 +53,27 @@ def load_policy(root):
     return allowed
 
 
+def unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_json_constant(value):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 def parse_report(audit):
     try:
-        report = json.loads(audit.stdout)
+        report = json.loads(audit.stdout, object_pairs_hook=unique_json_object,
+                            parse_constant=reject_json_constant)
         if "error" in report or not report["database"]["last-commit"]:
             raise ValueError("missing advisory database revision")
-        if report["database"]["advisory-count"] <= 0 or report["lockfile"]["dependency-count"] <= 0:
+        counts = (report["database"]["advisory-count"], report["lockfile"]["dependency-count"])
+        if any(type(count) is not int or count <= 0 for count in counts):
             raise ValueError("empty advisory database or lockfile")
         settings = report["settings"]
         if (settings["ignore"] != [] or settings["target_arch"] != []
@@ -67,6 +82,7 @@ def parse_report(audit):
             raise PolicyError("filtered audit report; remove ignored advisories or scan filters")
         vulnerabilities = report["vulnerabilities"]
         if (not isinstance(vulnerabilities["list"], list)
+                or type(vulnerabilities["count"]) is not int
                 or vulnerabilities["count"] != len(vulnerabilities["list"])
                 or vulnerabilities["found"] is not bool(vulnerabilities["list"])):
             raise ValueError("inconsistent vulnerability summary")
@@ -89,7 +105,7 @@ def parse_report(audit):
         raise PolicyError(f"invalid cargo audit report: {error}") from error
 
 
-def check_dormant(root, package):
+def check_dormant(root, packages):
     for features in ([], ["--all-features"]):
         tree = subprocess.run(
             ["cargo", "tree", "--locked", "--workspace", "--target", "all",
@@ -98,7 +114,7 @@ def check_dormant(root, package):
             cwd=root, capture_output=True, text=True, timeout=300,
         )
         if tree.returncode != 0:
-            raise PolicyError(f"cargo tree failed for {package}: {tree.stderr.strip()}")
+            raise PolicyError(f"cargo tree failed: {tree.stderr.strip()}")
         # Inspect the forward graph: inverse lookup can error for an optional package
         # absent under default features before we have checked all workspace features.
         # Cargo separates multiple workspace roots with blank lines.
@@ -109,7 +125,8 @@ def check_dormant(root, package):
             match = re.fullmatch(r"([A-Za-z0-9_-]+) v(\S+)(?: .*)?", line)
             if not match:
                 raise PolicyError(f"unrecognised cargo tree output: {line!r}")
-            if f"{match[1]}@{match[2]}" == package:
+            package = f"{match[1]}@{match[2]}"
+            if package in packages:
                 mode = "all features" if features else "default features"
                 raise PolicyError(
                     f"{package} is reachable ({mode}):\n{line}\n"
@@ -118,8 +135,38 @@ def check_dormant(root, package):
                 )
 
 
+def verify_registry_scan(root, findings):
+    # In 0.22.2 JSON mode silently hides failure to initialise the registry index.
+    # A terminal pass exposes that failure, including when no yanks were reported.
+    # Keep this check when removing the last dormant exception.
+    scan = subprocess.run(
+        ["cargo", "audit", "--format", "terminal", "--color", "never", "--deny", "warnings",
+         "--file", str(root / "Cargo.lock")],
+        cwd=root, capture_output=True, text=True, timeout=300,
+    )
+    output = scan.stdout + "\n" + scan.stderr
+    if (scan.returncode != int(bool(findings))
+            or not re.search(r"(?m)^\s*Updating crates\.io index\s*$", output)
+            or not re.search(r"(?m)^\s*Scanning .+ for vulnerabilities", output)):
+        raise PolicyError(f"cargo audit registry verification failed:\n{output.strip()}")
+    expected = set()
+    for count, singular, plural in (
+        (sum(f[0] == "vulnerability" for f in findings), "vulnerability", "vulnerabilities"),
+        (sum(f[0] != "vulnerability" for f in findings), "denied warning", "denied warnings"),
+    ):
+        if count:
+            expected.add(f"error: {count} {singular if count == 1 else plural} found!")
+    diagnostics = {line.strip() for line in output.splitlines()
+                   if line.strip().startswith(("error:", "warning:"))}
+    if diagnostics != expected:
+        raise PolicyError(f"cargo audit registry diagnostics or findings changed:\n{output.strip()}")
+
+
 def check(root):
     allowed = load_policy(root)
+    # Resolve even after the last exception is removed: a clean scan of an
+    # outdated lockfile must not omit dependencies newly added to manifests.
+    check_dormant(root, {f'{e["package"]}@{e["version"]}' for e in allowed.values()})
     audit = subprocess.run(
         ["cargo", "audit", "--json", "--deny", "warnings", "--file", str(root / "Cargo.lock")],
         cwd=root, capture_output=True, text=True, timeout=300,
@@ -127,6 +174,11 @@ def check(root):
     # Exit 1 means findings, not a broken scan. Operational errors use exit 2.
     if audit.returncode not in (0, 1):
         raise PolicyError(f"cargo audit failed ({audit.returncode}): {audit.stderr.strip()}")
+    # cargo-audit 0.22.2 may emit per-package yanked lookup errors on stderr and
+    # still return a valid JSON report with status 0/1. JSON mode is otherwise
+    # silent there; diagnostics mean we cannot establish that the scan completed.
+    if audit.stderr.strip():
+        raise PolicyError(f"cargo audit emitted diagnostics; scan may be incomplete:\n{audit.stderr.strip()}")
     findings = parse_report(audit)
     unexpected = findings - allowed.keys()
     if unexpected:
@@ -134,10 +186,10 @@ def check(root):
     stale = allowed.keys() - findings
     if stale:
         raise PolicyError(f"stale exceptions; remove or re-evaluate: {sorted(stale)}")
+    verify_registry_scan(root, findings)
 
     for entry in allowed.values():
         package = f'{entry["package"]}@{entry["version"]}'
-        check_dormant(root, package)
         print(f'allowed dormant: {package} / {entry["finding"]}\n  {entry["reason"]}')
     print(f"cargo audit policy passed: {len(allowed)} verified dormant exceptions")
 
