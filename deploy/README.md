@@ -177,6 +177,73 @@ One-time setup, any provider:
    # 17 2 * * * cd $HOME/sotto/deploy && ./backup.sh >> $HOME/sotto-backup.log 2>&1
    ```
 
+5. **Watch that it keeps running.** Cron reports to nobody, and a bucket that has stopped
+   receiving objects looks exactly like a bucket nobody has checked. Installing step 4 and
+   assuming it worked is how an instance ends up with months of no backups and no symptom.
+
+   The check is one question, and it is the same on every object store: **is the newest object
+   younger than 26 hours?** That threshold exceeds a full day on purpose, so a single missed night
+   breaches it rather than hiding inside it. Run it anywhere except the host, because a host that
+   has stopped taking backups cannot be relied on to report that it has. Have it ping a heartbeat
+   URL when it passes, so any external checker (e.g. a free UptimeRobot heartbeat monitor) alerts
+   you when the pings stop; alerting only on failure cannot report the checker's own death, which
+   is the failure that hides longest.
+
+   [`backup-freshness.yml`](../.github/workflows/backup-freshness.yml) is that check as a worked
+   example, for `gs://` destinations, running daily on GitHub Actions. It lists object names and
+   creation times, never fetches a backup, and the identity it uses holds no permission that would
+   let it, so the append-only posture above is unaffected.
+
+   Configure it with repository variables `SOTTO_BACKUP_BUCKET` (the same value as in `.env`,
+   scheme included), `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_MONITOR_SERVICE_ACCOUNT`, plus a
+   repository secret `BACKUP_HEARTBEAT_URL`. Until all three variables are set the job skips
+   rather than failing.
+
+   Grant the identity by federation rather than by issuing a key, so that no long-lived credential
+   exists to leak or rotate:
+
+   ```sh
+   # Google Cloud:
+   gcloud iam workload-identity-pools create github --location=global
+   gcloud iam workload-identity-pools providers create-oidc github \
+     --location=global --workload-identity-pool=github \
+     --issuer-uri="https://token.actions.githubusercontent.com" \
+     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+     --attribute-condition="assertion.repository=='<owner>/<repo>'"
+
+   gcloud iam service-accounts create sotto-backup-monitor
+   gcloud storage buckets add-iam-policy-binding gs://<bucket> \
+     --member="serviceAccount:sotto-backup-monitor@<project>.iam.gserviceaccount.com" \
+     --role="roles/storage.legacyBucketReader"
+   gcloud iam service-accounts add-iam-policy-binding \
+     sotto-backup-monitor@<project>.iam.gserviceaccount.com \
+     --role="roles/iam.workloadIdentityUser" \
+     --member="principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
+   ```
+
+   **The attribute condition is the security boundary, not a filter.** Without it the provider
+   trusts every GitHub Actions token in existence, so any repository anywhere could assume this
+   identity. `legacyBucketReader` is deliberate too: it grants `storage.objects.list` and
+   `storage.buckets.get` and nothing that reads an object, which is all a freshness check needs.
+
+   **Any other store.** The workflow skips cleanly unless the destination is `gs://`, so nothing
+   is ever half configured without saying so. Because `rclone` reaches every backend `backup.sh`
+   can write to, one command answers the question for all of them, from any scheduler that can
+   send a heartbeat afterwards:
+
+   ```sh
+   # Anything rclone reaches - gs://, s3://, B2, SFTP, a NAS:
+   rclone lsjson --max-age 26h "$SOTTO_BACKUP_BUCKET" | jq -e 'length > 0'
+
+   # AWS, without rclone:
+   aws s3api list-objects-v2 --bucket <bucket> \
+     --query 'max_by(Contents, &LastModified).LastModified'
+   ```
+
+   A non-zero exit is the alarm. On AWS the federated equivalent of the grant above is registering
+   GitHub's OIDC issuer as an identity provider and giving the role a trust policy conditioned on
+   the repository, with `s3:ListBucket` and nothing else.
+
 **Restore** (into a running instance; drops and recreates objects from the dump). Fetch the
 dump on your own machine, never the host - the append-only posture means the host cannot read
 what it wrote. One consequence of uniform bucket-level access is easy to miss: it disables the
