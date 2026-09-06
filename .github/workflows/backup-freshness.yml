@@ -1,8 +1,8 @@
 name: Backup freshness
 
 # Nightly backups fail silently by nature: cron reports to nobody, and a bucket that stops
-# receiving objects looks exactly like a bucket nobody has looked at. This instance ran without a
-# backup cron installed at all from July until 4 September 2026 and nothing anywhere complained.
+# receiving objects looks exactly like a bucket nobody has looked at. A backup step that was
+# documented but never installed is indistinguishable, for months, from one running every night.
 #
 # This job is the alarm for that. It asks one question - is the newest backup recent - and it
 # reports by two routes with opposite failure modes: a heartbeat that must keep arriving, so the
