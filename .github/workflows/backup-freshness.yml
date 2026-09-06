@@ -160,7 +160,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # Identify our own alert by label, not by title. Title search is token based, so a human
+          # Identify our own alert by label, not by title. Title search is token-based, so a human
           # issue mentioning stale backups would be adopted, commented on, and later closed by this
           # workflow. A label is exact and only this job applies it. --force makes creating it
           # idempotent, so the workflow carries its own dependency rather than assuming setup.

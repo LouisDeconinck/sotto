@@ -198,7 +198,7 @@ One-time setup, any provider:
    repository secret `BACKUP_HEARTBEAT_URL`. Until all three variables are set the job skips
    rather than failing.
 
-   Grant the identity by federation rather than by issuing a key, so that no long lived credential
+   Grant the identity by federation rather than by issuing a key, so that no long-lived credential
    exists to leak or rotate:
 
    ```sh
