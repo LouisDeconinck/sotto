@@ -177,6 +177,56 @@ One-time setup, any provider:
    # 17 2 * * * cd $HOME/sotto/deploy && ./backup.sh >> $HOME/sotto-backup.log 2>&1
    ```
 
+5. **Watch that it keeps running.** Cron reports to nobody, and a bucket that has stopped
+   receiving objects looks exactly like a bucket nobody has checked. Installing step 4 and
+   assuming it worked is how an instance ends up with months of no backups and no symptom.
+
+   [`backup-freshness.yml`](../.github/workflows/backup-freshness.yml) is the alarm: once a day
+   it lists the bucket, compares the newest object against a threshold of 26 hours, and opens an
+   issue when that is breached. The threshold exceeds a full day on purpose, so a single missed
+   night breaches it rather than hiding inside it. On success it pings a heartbeat URL, so the
+   monitoring service alerts you when the pings stop, which is what catches the check itself being
+   disabled or broken. Alerting only on failure cannot see that.
+
+   It lists object names and creation times. It never fetches a backup, and the identity it uses
+   holds no permission that would let it, so the append-only posture above is unaffected.
+
+   Configure it with repository variables `BACKUP_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and
+   `GCP_MONITOR_SERVICE_ACCOUNT`, an optional `BACKUP_MAX_AGE_HOURS`, and a repository secret
+   `BACKUP_HEARTBEAT_URL`. Until all three variables are set the job skips rather than failing.
+
+   Grant the identity by federation rather than by issuing a key, so that no long lived credential
+   exists to leak or rotate:
+
+   ```sh
+   # Google Cloud:
+   gcloud iam workload-identity-pools create github --location=global
+   gcloud iam workload-identity-pools providers create-oidc github \
+     --location=global --workload-identity-pool=github \
+     --issuer-uri="https://token.actions.githubusercontent.com" \
+     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+     --attribute-condition="assertion.repository=='<owner>/<repo>'"
+
+   gcloud iam service-accounts create sotto-backup-monitor
+   gcloud storage buckets add-iam-policy-binding gs://<bucket> \
+     --member="serviceAccount:sotto-backup-monitor@<project>.iam.gserviceaccount.com" \
+     --role="roles/storage.legacyBucketReader"
+   gcloud iam service-accounts add-iam-policy-binding \
+     sotto-backup-monitor@<project>.iam.gserviceaccount.com \
+     --role="roles/iam.workloadIdentityUser" \
+     --member="principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
+   ```
+
+   **The attribute condition is the security boundary, not a filter.** Without it the provider
+   trusts every GitHub Actions token in existence, so any repository anywhere could assume this
+   identity. `legacyBucketReader` is deliberate too: it grants `storage.objects.list` and
+   `storage.buckets.get` and nothing that reads an object, which is all a freshness check needs.
+
+   The same shape works elsewhere. On AWS, register GitHub's OIDC issuer as an identity provider
+   and give the role a trust policy conditioned on the repository, with `s3:ListBucket` only. Any
+   scheduler can run the check; what matters is that it runs somewhere other than the host, since
+   a host that has stopped taking backups cannot be relied on to report that it has.
+
 **Restore** (into a running instance; drops and recreates objects from the dump). Fetch the
 dump on your own machine, never the host - the append-only posture means the host cannot read
 what it wrote. One consequence of uniform bucket-level access is easy to miss: it disables the
