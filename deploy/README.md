@@ -192,8 +192,8 @@ One-time setup, any provider:
    holds no permission that would let it, so the append-only posture above is unaffected.
 
    Configure it with repository variables `BACKUP_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and
-   `GCP_MONITOR_SERVICE_ACCOUNT`, an optional `BACKUP_MAX_AGE_HOURS`, and a repository secret
-   `BACKUP_HEARTBEAT_URL`. Until all three variables are set the job skips rather than failing.
+   `GCP_MONITOR_SERVICE_ACCOUNT`, plus a repository secret `BACKUP_HEARTBEAT_URL`. Until all three
+   variables are set the job skips rather than failing.
 
    Grant the identity by federation rather than by issuing a key, so that no long lived credential
    exists to leak or rotate:

@@ -71,8 +71,10 @@ jobs:
           BUCKET: ${{ vars.BACKUP_BUCKET }}
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           # One missed night must breach this, so it has to exceed the interval between the backup
-          # and this check plus a full day. Override for a different backup schedule.
-          MAX_AGE_HOURS: ${{ vars.BACKUP_MAX_AGE_HOURS || '26' }}
+          # and this check plus a full day. Deliberately a constant: the figure is derived from the
+          # schedule above, and a deployment that changes the schedule should change both together
+          # rather than tune a threshold until the alarm stops complaining.
+          MAX_AGE_HOURS: "26"
         run: |
           set -euo pipefail
 
