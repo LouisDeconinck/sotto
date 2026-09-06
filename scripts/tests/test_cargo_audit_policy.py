@@ -13,10 +13,12 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-LOADER = importlib.machinery.SourceFileLoader("audit_policy", str(ROOT / "scripts/check-cargo-audit"))
+LOADER = importlib.machinery.SourceFileLoader(
+    "audit_policy", str(ROOT / "scripts/check-cargo-audit")
+)
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
-checker = importlib.util.module_from_spec(SPEC)
-LOADER.exec_module(checker)
+CHECKER = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(CHECKER)
 SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 RSA = {"name": "rsa", "version": "0.9.10", "source": SOURCE}
 SPIN = {"name": "spin", "version": "0.9.8", "source": SOURCE}
@@ -54,7 +56,13 @@ class PolicyTest(unittest.TestCase):
         self.audit_report = report()
         self.audit_status = 1
         self.audit_stderr = ""
+        self.audit_version = "cargo-audit-audit 0.22.2\n"
         self.registry_diagnostic = ""
+        self.mutate_lock = False
+        self.terminal_findings = (
+            "Crate:     rsa\nVersion:   0.9.10\nID:        RUSTSEC-2023-0071\n\n"
+            "Crate:     spin\nVersion:   0.9.8\nWarning:   yanked\n"
+        )
         self.tree_output = "app v1.0.0\n\nanother-workspace-root v1.0.0\n"
         self.tree_status = 0
         self.calls = []
@@ -62,17 +70,34 @@ class PolicyTest(unittest.TestCase):
     def command(self, args, **kwargs):
         self.calls.append(args)
         if args[1] == "audit":
+            if "--version" in args:
+                return subprocess.CompletedProcess(args, 0, self.audit_version, "")
             if "--format" in args:
-                output = "    Updating crates.io index\n    Scanning Cargo.lock for vulnerabilities (2 crate dependencies)\n"
+                output = (
+                    "    Updating crates.io index\n"
+                    "    Scanning Cargo.lock for vulnerabilities (2 crate dependencies)\n"
+                )
                 if self.audit_status == 1:
                     output += "error: 1 vulnerability found!\nerror: 1 denied warning found!\n"
-                return subprocess.CompletedProcess(args, self.audit_status, output, self.registry_diagnostic)
-            return subprocess.CompletedProcess(args, self.audit_status, json.dumps(self.audit_report), self.audit_stderr)
-        return subprocess.CompletedProcess(args, self.tree_status, self.tree_output, "tree diagnostic")
+                    output += self.terminal_findings
+                if self.mutate_lock:
+                    self.lockfile.write_text(self.lockfile.read_text() + "\n")
+                return subprocess.CompletedProcess(
+                    args, self.audit_status, output, self.registry_diagnostic
+                )
+            return subprocess.CompletedProcess(
+                args, self.audit_status, json.dumps(self.audit_report), self.audit_stderr
+            )
+        return subprocess.CompletedProcess(
+            args, self.tree_status, self.tree_output, "tree diagnostic"
+        )
 
     def check(self):
-        with patch.object(checker.subprocess, "run", side_effect=self.command), contextlib.redirect_stdout(io.StringIO()):
-            return checker.check(self.root)
+        with (
+            patch.object(CHECKER.subprocess, "run", side_effect=self.command),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            return CHECKER.check(self.root)
 
     def test_current_dormant_findings_pass_despite_audit_exit_one(self):
         self.check()
@@ -99,7 +124,7 @@ class PolicyTest(unittest.TestCase):
                     "advisory": {"id": advisory},
                 })
                 self.audit_report["vulnerabilities"]["count"] += 1
-                with self.assertRaisesRegex(checker.PolicyError, "unapproved"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "unapproved"):
                     self.check()
 
     def test_new_yanked_and_informational_warnings_fail(self):
@@ -107,15 +132,16 @@ class PolicyTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.audit_report = report()
                 self.audit_report["warnings"].setdefault(kind, []).append({
-                    "kind": kind, "package": {"name": "other", "version": "1.0.0", "source": SOURCE},
+                    "kind": kind,
+                    "package": {"name": "other", "version": "1.0.0", "source": SOURCE},
                     "advisory": None if kind == "yanked" else {"id": "RUSTSEC-2026-9999"},
                 })
-                with self.assertRaisesRegex(checker.PolicyError, "unapproved"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "unapproved"):
                     self.check()
 
     def test_reachable_package_fails_with_dependency_path(self):
         self.tree_output = "sotto-server v0.6.0\nsqlx-mysql v0.8.6\nrsa v0.9.10\n"
-        with self.assertRaisesRegex(checker.PolicyError, "reachable.*\\n.*rsa"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "reachable.*\\n.*rsa"):
             self.check()
 
     def test_tool_failure_is_not_evidence_of_dormancy(self):
@@ -123,14 +149,14 @@ class PolicyTest(unittest.TestCase):
             with self.subTest(tool=failing_tool):
                 self.audit_status = 2 if failing_tool == "audit" else 1
                 self.tree_status = 101 if failing_tool == "tree" else 0
-                with self.assertRaisesRegex(checker.PolicyError, f"cargo {failing_tool} failed"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, f"cargo {failing_tool} failed"):
                     self.check()
 
     def test_empty_or_malformed_graph_is_not_evidence_of_dormancy(self):
         for output in ("", "\n\n", "unexpected cargo output\n"):
             with self.subTest(output=output):
                 self.tree_output = output
-                with self.assertRaisesRegex(checker.PolicyError, "cargo tree"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "cargo tree"):
                     self.check()
 
     def test_audit_report_must_be_complete_and_consistent(self):
@@ -142,7 +168,7 @@ class PolicyTest(unittest.TestCase):
         for malformed in cases:
             with self.subTest(report=malformed):
                 self.audit_report = malformed
-                with self.assertRaisesRegex(checker.PolicyError, "report"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "report"):
                     self.check()
 
     def test_duplicate_json_keys_and_nonfinite_numbers_fail(self):
@@ -154,17 +180,19 @@ class PolicyTest(unittest.TestCase):
             valid.replace('"dependency-count": 2', '"dependency-count": Infinity'),
         ):
             with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(checker.PolicyError, "report"):
-                    checker.parse_report(subprocess.CompletedProcess([], 1, invalid, ""))
+                with self.assertRaisesRegex(CHECKER.PolicyError, "report"):
+                    CHECKER.parse_report(subprocess.CompletedProcess([], 1, invalid, ""))
 
     def test_audit_status_must_agree_with_report(self):
         self.audit_status = 0
-        with self.assertRaisesRegex(checker.PolicyError, "exit status"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "exit status"):
             self.check()
 
     def test_partial_yanked_lookup_failure_rejects_otherwise_valid_report(self):
-        self.audit_stderr = "error: could not check if other was yanked: failed to fetch registry entry\n"
-        with self.assertRaisesRegex(checker.PolicyError, "diagnostics"):
+        self.audit_stderr = (
+            "error: could not check if other was yanked: failed to fetch registry entry\n"
+        )
+        with self.assertRaisesRegex(CHECKER.PolicyError, "diagnostics"):
             self.check()
 
     def test_registry_initialisation_failure_rejects_clean_json_scan(self):
@@ -173,26 +201,87 @@ class PolicyTest(unittest.TestCase):
         self.audit_report["warnings"] = {}
         self.audit_status = 0
         self.registry_diagnostic = "warning: couldn't update crates.io index: network unavailable\n"
-        with self.assertRaisesRegex(checker.PolicyError, "registry diagnostics"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "registry diagnostics"):
             self.check()
 
     def test_recovered_lock_wait_is_allowed_only_with_a_complete_scan(self):
-        warning = "warning: directory /tmp/advisory-db is locked, waiting for up to 300 seconds for it to become available\n"
+        warning = (
+            "warning: directory /tmp/advisory-db is locked, waiting for up to 300 seconds "
+            "for it to become available\n"
+        )
         self.audit_stderr = warning
         self.registry_diagnostic = warning
         self.check()
         self.audit_stderr += "error: couldn't check if the package is yanked: network error\n"
-        with self.assertRaisesRegex(checker.PolicyError, "diagnostics"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "diagnostics"):
             self.check()
+
+    def test_tool_version_mismatch_fails_before_auditing(self):
+        for version in ("cargo-audit-audit 0.22.3", "cargo-audit-audit 0.21.2", ""):
+            with self.subTest(version=version):
+                self.audit_version = version
+                self.calls.clear()
+                with self.assertRaisesRegex(CHECKER.PolicyError, "0.22.2 required"):
+                    self.check()
+                self.assertFalse(any("--json" in args for args in self.calls))
+                self.assertFalse(any(args[1] == "tree" for args in self.calls))
+
+    def test_terminal_identities_must_match_even_when_counts_agree(self):
+        original = self.terminal_findings
+        for old, new in (("rsa", "other"), ("0.9.10", "0.9.11"),
+                         ("RUSTSEC-2023-0071", "RUSTSEC-2026-9999"),
+                         ("yanked", "unmaintained")):
+            with self.subTest(old=old):
+                self.terminal_findings = original.replace(old, new)
+                with self.assertRaisesRegex(CHECKER.PolicyError, "identities differ"):
+                    self.check()
+
+    def test_incomplete_or_duplicate_terminal_findings_fail(self):
+        original = self.terminal_findings
+        for findings in (
+            original + "Crate: ",
+            original.replace("Version:   0.9.10\n", ""),
+            original + original,
+            original.replace("ID:        RUSTSEC-2023-0071\n", ""),
+        ):
+            with self.subTest(findings=findings):
+                self.terminal_findings = findings
+                with self.assertRaisesRegex(CHECKER.PolicyError, "terminal finding"):
+                    self.check()
+
+    def test_lockfile_change_between_scans_fails(self):
+        self.mutate_lock = True
+        with self.assertRaisesRegex(CHECKER.PolicyError, "lockfile changed during auditing"):
+            self.check()
+
+    def test_silent_json_registry_failure_needs_independent_terminal_success(self):
+        # Model structurally valid JSON with no yanks and no stderr. It cannot
+        # tell us whether its registry scan ran, so only the terminal scan can
+        # establish a successful independent check after removing all exceptions.
+        self.policy.write_text("version = 1\nallowed_dormant = []\n")
+        self.audit_report["vulnerabilities"] = {"found": False, "count": 0, "list": []}
+        self.audit_report["warnings"] = {}
+        self.audit_status = 0
+        self.registry_diagnostic = (
+            "warning: directory /tmp/index is locked, waiting for up to 300 seconds "
+            "for it to become available\n"
+            "warning: couldn't update crates.io index: failed to obtain lock file\n"
+        )
+        with self.assertRaisesRegex(CHECKER.PolicyError, "registry diagnostics"):
+            self.check()
+        # If the transient lock clears, the complete independent scan is what
+        # permits acceptance. This does not certify the earlier JSON scan.
+        self.registry_diagnostic = ""
+        self.check()
 
     def test_missing_finding_requires_exception_removal(self):
         self.audit_report["warnings"] = {}
-        with self.assertRaisesRegex(checker.PolicyError, "stale"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "stale"):
             self.check()
 
     def test_empty_policy_passes_only_with_clean_audit(self):
         self.policy.write_text("version = 1\nallowed_dormant = []\n")
-        with self.assertRaisesRegex(checker.PolicyError, "unapproved"):
+        with self.assertRaisesRegex(CHECKER.PolicyError, "unapproved"):
             self.check()
         self.audit_report["vulnerabilities"] = {"found": False, "count": 0, "list": []}
         self.audit_report["warnings"] = {}
@@ -210,7 +299,7 @@ class PolicyTest(unittest.TestCase):
         ):
             with self.subTest(policy=policy):
                 self.policy.write_text(policy)
-                with self.assertRaisesRegex(checker.PolicyError, "policy"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "policy"):
                     self.check()
 
     def test_changed_or_additional_lock_version_requires_policy_review(self):
@@ -221,7 +310,7 @@ class PolicyTest(unittest.TestCase):
         ):
             with self.subTest(lock=lock):
                 self.lockfile.write_text(lock)
-                with self.assertRaisesRegex(checker.PolicyError, "lockfile"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "lockfile"):
                     self.check()
 
     def test_filtered_or_incomplete_report_fails(self):
@@ -233,14 +322,24 @@ class PolicyTest(unittest.TestCase):
             with self.subTest(field=field):
                 self.audit_report = report()
                 self.audit_report["settings"][field] = value
-                with self.assertRaisesRegex(checker.PolicyError, "filtered"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "filtered"):
                     self.check()
         for field in ("database", "settings", "vulnerabilities", "warnings"):
             with self.subTest(missing=field):
                 self.audit_report = report()
                 del self.audit_report[field]
-                with self.assertRaisesRegex(checker.PolicyError, "report"):
+                with self.assertRaisesRegex(CHECKER.PolicyError, "report"):
                     self.check()
+
+
+class InvocationTest(unittest.TestCase):
+    def test_arguments_fail_with_documented_exit_code_and_usage(self):
+        result = subprocess.run(
+            [str(ROOT / "scripts/check-cargo-audit"), "unexpected"],
+            cwd="/", capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("usage: scripts/check-cargo-audit", result.stderr)
 
 
 class CargoGraphTest(unittest.TestCase):
@@ -261,9 +360,13 @@ class CargoGraphTest(unittest.TestCase):
                 f'[package]\nname = "{name}"\nversion = "{version}"\nedition = "2021"\n'
             )
         self.app = self.root / "app/Cargo.toml"
-        self.app.write_text(self.app.read_text() + '\n[dependencies]\nadapter = { path = "../adapter" }\n')
+        self.app.write_text(
+            self.app.read_text() + '\n[dependencies]\nadapter = { path = "../adapter" }\n'
+        )
         adapter = self.root / "adapter/Cargo.toml"
-        adapter.write_text(adapter.read_text() + '\n[dependencies]\nrsa = { path = "../rsa", optional = true }\n')
+        adapter.write_text(
+            adapter.read_text() + '\n[dependencies]\nrsa = { path = "../rsa", optional = true }\n'
+        )
 
     def lock(self):
         subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=self.root,
@@ -271,7 +374,7 @@ class CargoGraphTest(unittest.TestCase):
 
     def test_transitive_optional_crate_is_dormant(self):
         self.lock()
-        checker.check_dormant(self.root, {"rsa@0.9.10"})
+        CHECKER.check_dormant(self.root, {"rsa@0.9.10"})
 
     def test_normal_build_dev_and_non_host_target_edges_are_rejected(self):
         original = self.app.read_text()
@@ -282,30 +385,31 @@ class CargoGraphTest(unittest.TestCase):
                 header = "" if section == "dependencies" else f"\n[{section}]\n"
                 self.app.write_text(original + header + 'rsa = { path = "../rsa" }\n')
                 self.lock()
-                with self.assertRaisesRegex(checker.PolicyError, "reachable"):
-                    checker.check_dormant(self.root, {"rsa@0.9.10"})
+                with self.assertRaisesRegex(CHECKER.PolicyError, "reachable"):
+                    CHECKER.check_dormant(self.root, {"rsa@0.9.10"})
 
     def test_workspace_optional_feature_is_rejected(self):
         self.app.write_text(self.app.read_text() + 'rsa = { path = "../rsa", optional = true }\n')
         self.lock()
-        with self.assertRaisesRegex(checker.PolicyError, "reachable \\(all features\\)"):
-            checker.check_dormant(self.root, {"rsa@0.9.10"})
+        with self.assertRaisesRegex(CHECKER.PolicyError, "reachable \\(all features\\)"):
+            CHECKER.check_dormant(self.root, {"rsa@0.9.10"})
 
     def test_outdated_lockfile_fails_instead_of_being_regenerated(self):
         self.lock()
         before = (self.root / "Cargo.lock").read_bytes()
         self.app.write_text(self.app.read_text() + 'rsa = { path = "../rsa" }\n')
-        with self.assertRaisesRegex(checker.PolicyError, "cargo tree failed"):
-            checker.check_dormant(self.root, {"rsa@0.9.10"})
+        with self.assertRaisesRegex(CHECKER.PolicyError, "cargo tree failed"):
+            CHECKER.check_dormant(self.root, {"rsa@0.9.10"})
         self.assertEqual((self.root / "Cargo.lock").read_bytes(), before)
 
     def test_empty_policy_still_rejects_outdated_lockfile(self):
         self.lock()
         (self.root / ".ci").mkdir()
-        (self.root / ".ci/cargo-audit-policy.toml").write_text("version = 1\nallowed_dormant = []\n")
+        policy = self.root / ".ci/cargo-audit-policy.toml"
+        policy.write_text("version = 1\nallowed_dormant = []\n")
         self.app.write_text(self.app.read_text() + 'rsa = { path = "../rsa" }\n')
-        with self.assertRaisesRegex(checker.PolicyError, "cargo tree failed"):
-            checker.check(self.root)
+        with self.assertRaisesRegex(CHECKER.PolicyError, "cargo tree failed"):
+            CHECKER.check(self.root)
 
 
 if __name__ == "__main__":

@@ -119,6 +119,12 @@ cargo test --workspace
 
 - When working on server or integration behaviour, use the existing crate test harnesses.
 
+- Run the script policy tests too (Python 3.11 or newer; CI uses 3.12):
+
+```sh
+python3 -B -m unittest discover -s scripts/tests -v
+```
+
 ## Supply-chain policy
 
 This repository includes `deny.toml` for dependency and licence checks. Validate the supply-chain policy locally with:
@@ -127,7 +133,8 @@ This repository includes `deny.toml` for dependency and licence checks. Validate
 cargo deny check
 ```
 
-Run `scripts/check-cargo-audit` too (Python 3.11+ and `cargo-audit` 0.22.2 required).
+Run `scripts/check-cargo-audit` too (Python 3.11 or newer and `cargo-audit` exactly 0.22.2).
+CI uses Python 3.12.
 See [Development checks](README.md#development-checks) for installation, policy tests and
 the rules for reviewing or removing dormant lockfile exceptions.
 
