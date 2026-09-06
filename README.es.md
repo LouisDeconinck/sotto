@@ -209,7 +209,8 @@ La política de cadena de suministro se define en `deny.toml` y se comprueba en 
 cargo deny check
 ```
 
-La auditoría completa del lockfile también se ejecuta en el job `supply-chain` de CI (requiere Python 3.11+):
+La auditoría completa del lockfile también se ejecuta en el job `supply-chain` de CI.
+Requiere Python 3.11 o posterior; CI usa 3.12. cargo-audit debe ser exactamente la versión 0.22.2:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -217,17 +218,25 @@ python3 -B -m unittest discover -s scripts/tests -v
 scripts/check-cargo-audit
 ```
 
-La [política de auditoría](.ci/cargo-audit-policy.toml) registra excepciones exactas para las entradas inactivas `rsa` y
-`spin` del lockfile. Cada una debe coincidir en paquete, versión, registro y hallazgo, y no tener ruta de dependencia normal,
-de compilación ni de pruebas en ningún destino, con las features por defecto y todas las del espacio de trabajo. Nuevos
-hallazgos, identidades cambiadas, paquetes alcanzables, análisis fallidos y excepciones obsoletas hacen fallar CI. Elimina
-una excepción en el mismo PR que elimine su hallazgo; una lista de excepciones vacía requiere una auditoría limpia.
-`cargo audit` a secas sigue reportando estos hallazgos: esta política documenta y verifica que esas entradas siguen inactivas, y no
-afirma que las versiones vulnerables o retiradas se hayan corregido. Los [valores de auditoría](.cargo/audit.toml) del
-proyecto mantienen activas la obtención de avisos y las comprobaciones de versiones retiradas, y anulan la configuración
-global de auditoría del desarrollador. No añadas exclusiones de avisos ni filtros de análisis. El comprobador también ejecuta
-una auditoría con formato de terminal para detectar fallos de registro que cargo-audit 0.22.2 puede omitir en la salida JSON,
-de modo que un análisis de paquetes retirados no disponible no cuente como resultado limpio.
+La [política de auditoría](.ci/cargo-audit-policy.toml) registra excepciones exactas para las entradas
+inactivas `rsa` y `spin`. Deben coincidir `package`, `version`, `source`, `kind` y `finding`.
+No debe haber rutas de dependencia `normal`, `build` ni `dev` en ningún destino, con las features
+por defecto y todas las del espacio de trabajo. Las aristas `dev` corresponden a `dev-dependencies`.
+
+Nuevos hallazgos, identidades cambiadas, paquetes alcanzables, análisis fallidos y excepciones
+obsoletas hacen fallar CI. Elimina cada excepción en el mismo PR que elimine su hallazgo.
+Una lista vacía requiere una auditoría limpia. El comprobador devuelve 0 si tiene éxito y 1 ante
+un fallo de política o análisis. `cargo audit` sigue reportando los hallazgos inactivos;
+las excepciones no corrigen las versiones vulnerables o retiradas.
+
+Los [valores de auditoría](.cargo/audit.toml) mantienen activas la obtención de avisos y las
+comprobaciones de versiones retiradas, y anulan la configuración global del desarrollador.
+No añadas exclusiones de avisos ni filtros de análisis.
+
+El modo JSON de cargo-audit 0.22.2 puede omitir silenciosamente las comprobaciones de versiones
+retiradas. Se exige un análisis independiente en formato de terminal, sin fallos del registro y
+con identidades de hallazgos coincidentes. Esto acredita otro análisis completo, no que el análisis
+JSON anterior haya finalizado.
 
 El control cruzado entre implementaciones demuestra que las compilaciones nativa y WASM coinciden: el texto cifrado producido en nativo
 se descifra byte a byte en WASM a partir de vectores de referencia compartidos:
