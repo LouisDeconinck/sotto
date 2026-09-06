@@ -53,9 +53,22 @@ jobs:
           if [ -z "$DESTINATION" ] || [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "Backup monitoring is not configured; see deploy/README.md section Backups." >&2
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # backup.sh uploads to any of gs://, s3:// and rclone remotes. This workflow implements
+          # the gs:// case only, so say so plainly rather than failing later with something that
+          # reads like a bug. The check itself is three lines of shell against any store, and the
+          # runbook shows it; nobody should conclude their storage is unsupported.
+          case "$DESTINATION" in
+            gs://*)
+              echo "configured=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "configured=false" >> "$GITHUB_OUTPUT"
+              echo "This workflow checks gs:// destinations. For ${DESTINATION%%:*}, run the equivalent check from any scheduler; see deploy/README.md section Backups." >&2
+              ;;
+          esac
 
       - name: Authenticate to Google Cloud
         id: auth

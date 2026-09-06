@@ -181,15 +181,17 @@ One-time setup, any provider:
    receiving objects looks exactly like a bucket nobody has checked. Installing step 4 and
    assuming it worked is how an instance ends up with months of no backups and no symptom.
 
-   [`backup-freshness.yml`](../.github/workflows/backup-freshness.yml) is the alarm: once a day
-   it lists the bucket, compares the newest object against a threshold of 26 hours, and opens an
-   issue when that is breached. The threshold exceeds a full day on purpose, so a single missed
-   night breaches it rather than hiding inside it. On success it pings a heartbeat URL, so the
-   monitoring service alerts you when the pings stop, which is what catches the check itself being
-   disabled or broken. Alerting only on failure cannot see that.
+   The check is one question, and it is the same on every object store: **is the newest object
+   younger than 26 hours?** That threshold exceeds a full day on purpose, so a single missed night
+   breaches it rather than hiding inside it. Run it anywhere except the host, because a host that
+   has stopped taking backups cannot be relied on to report that it has. Have it ping a heartbeat
+   URL when it passes, so an external checker alerts you when the pings stop; alerting only on
+   failure cannot report the checker's own death, which is the failure that hides longest.
 
-   It lists object names and creation times. It never fetches a backup, and the identity it uses
-   holds no permission that would let it, so the append-only posture above is unaffected.
+   [`backup-freshness.yml`](../.github/workflows/backup-freshness.yml) is that check as a worked
+   example, for `gs://` destinations, running daily on GitHub Actions. It lists object names and
+   creation times, never fetches a backup, and the identity it uses holds no permission that would
+   let it, so the append-only posture above is unaffected.
 
    Configure it with repository variables `SOTTO_BACKUP_BUCKET` (the same value as in `.env`,
    scheme included), `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_MONITOR_SERVICE_ACCOUNT`, plus a
@@ -223,10 +225,23 @@ One-time setup, any provider:
    identity. `legacyBucketReader` is deliberate too: it grants `storage.objects.list` and
    `storage.buckets.get` and nothing that reads an object, which is all a freshness check needs.
 
-   The same shape works elsewhere. On AWS, register GitHub's OIDC issuer as an identity provider
-   and give the role a trust policy conditioned on the repository, with `s3:ListBucket` only. Any
-   scheduler can run the check; what matters is that it runs somewhere other than the host, since
-   a host that has stopped taking backups cannot be relied on to report that it has.
+   **Any other store.** The workflow skips cleanly unless the destination is `gs://`, so nothing
+   is ever half configured without saying so. Because `rclone` reaches every backend `backup.sh`
+   can write to, one command answers the question for all of them, from any scheduler that can
+   send a heartbeat afterwards:
+
+   ```sh
+   # Anything rclone reaches - gs://, s3://, B2, SFTP, a NAS:
+   rclone lsjson --max-age 26h "$SOTTO_BACKUP_BUCKET" | jq -e 'length > 0'
+
+   # AWS, without rclone:
+   aws s3api list-objects-v2 --bucket <bucket> \
+     --query 'max_by(Contents, &LastModified).LastModified'
+   ```
+
+   A non-zero exit is the alarm. On AWS the federated equivalent of the grant above is registering
+   GitHub's OIDC issuer as an identity provider and giving the role a trust policy conditioned on
+   the repository, with `s3:ListBucket` and nothing else.
 
 **Restore** (into a running instance; drops and recreates objects from the dump). Fetch the
 dump on your own machine, never the host - the append-only posture means the host cannot read
