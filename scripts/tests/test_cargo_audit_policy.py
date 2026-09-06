@@ -224,6 +224,7 @@ class PolicyTest(unittest.TestCase):
                 with self.assertRaisesRegex(CHECKER.PolicyError, "0.22.2 required"):
                     self.check()
                 self.assertFalse(any("--json" in args for args in self.calls))
+                self.assertFalse(any(args[1] == "tree" for args in self.calls))
 
     def test_terminal_identities_must_match_even_when_counts_agree(self):
         original = self.terminal_findings
