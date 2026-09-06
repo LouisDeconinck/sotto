@@ -207,7 +207,8 @@ A política de cadeia de suprimentos está definida em `deny.toml` e é verifica
 cargo deny check
 ```
 
-A auditoria completa do lockfile também roda no job `supply-chain` do CI (requer Python 3.11+):
+A auditoria completa do lockfile também roda no job `supply-chain` do CI.
+Requer Python 3.11 ou mais recente; o CI usa 3.12. cargo-audit deve estar exatamente na versão 0.22.2:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -215,17 +216,26 @@ python3 -B -m unittest discover -s scripts/tests -v
 scripts/check-cargo-audit
 ```
 
-A [política de auditoria](.ci/cargo-audit-policy.toml) registra exceções exatas para as entradas adormecidas `rsa` e
-`spin` do lockfile. Cada uma precisa corresponder ao pacote, à versão, ao registro e ao achado, e não ter nenhum caminho de dependência
-normal, de build ou de teste em nenhum target, com as features padrão e todas as do workspace. Novos achados, identidades
-alteradas, pacotes alcançáveis, varreduras com falha e exceções obsoletas quebram o CI. Remova uma exceção no mesmo PR que
-remover seu achado; uma lista de exceções vazia exige uma auditoria limpa. O `cargo audit` puro continua relatando esses
-achados: esta política documenta e verifica que eles permanecem adormecidos, e não afirma que as releases vulneráveis ou retiradas foram
-corrigidas. Os [padrões de auditoria](.cargo/audit.toml) do projeto mantêm a busca de advisories e as verificações de
-retiradas ativadas e sobrescrevem a configuração global de auditoria do desenvolvedor. Não adicione ignorados de advisories
-nem filtros de varredura. O verificador também roda uma auditoria em formato de terminal para detectar falhas de registro que
-o cargo-audit 0.22.2 pode omitir na saída JSON, para que uma varredura indisponível de pacotes retirados não conte como
-resultado limpo.
+A [política de auditoria](.ci/cargo-audit-policy.toml) registra exceções exatas para entradas
+adormecidas `rsa` e `spin`. Os campos `package`, `version`, `source`, `kind` e `finding` devem
+corresponder. Não pode existir caminho de dependência `normal`, `build` ou `dev` em nenhum target,
+com as features padrão ou todas as do workspace. Cargo chama as dependências de desenvolvimento
+de `dev-dependencies`.
+
+Novos achados, identidades alteradas, pacotes alcançáveis, varreduras com falha e exceções obsoletas
+fazem o CI falhar. Remova cada exceção no mesmo PR que remover seu achado. Uma lista vazia exige
+uma auditoria limpa. O verificador retorna 0 em caso de sucesso e 1 em caso de falha na política ou
+na varredura. O `cargo audit` continua relatando os achados adormecidos; as exceções não corrigem
+as versões vulneráveis ou retiradas.
+
+Os [padrões de auditoria](.cargo/audit.toml) mantêm a busca de avisos e as verificações de versões
+retiradas ativas, substituindo a configuração global do desenvolvedor.
+Não adicione exceções de avisos nem filtros de varredura.
+
+O modo JSON do cargo-audit 0.22.2 pode omitir silenciosamente verificações de versões retiradas.
+Por isso, é exigida uma varredura independente em formato de terminal, sem falhas de registro e
+com identidades de achados correspondentes. Isso comprova uma varredura separada bem-sucedida,
+sem provar que a varredura JSON anterior foi concluída.
 
 A verificação cruzada entre implementações prova que os builds nativo e WASM concordam: texto cifrado produzido no nativo
 é descriptografado byte a byte no WASM a partir de vetores de referência compartilhados:

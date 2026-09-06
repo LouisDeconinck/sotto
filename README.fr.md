@@ -209,7 +209,8 @@ La politique de chaîne d'approvisionnement est définie dans `deny.toml` et vé
 cargo deny check
 ```
 
-L'audit complet du lockfile s'exécute aussi dans le job `supply-chain` de la CI (Python 3.11+ requis) :
+L'audit complet du lockfile s'exécute aussi dans le job `supply-chain` de la CI.
+Python 3.11 ou ultérieur est requis ; la CI utilise 3.12. cargo-audit doit être exactement en 0.22.2 :
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -217,17 +218,26 @@ python3 -B -m unittest discover -s scripts/tests -v
 scripts/check-cargo-audit
 ```
 
-La [politique d'audit](.ci/cargo-audit-policy.toml) consigne des exceptions exactes pour les entrées dormantes `rsa` et
-`spin` du lockfile. Chacune doit correspondre à son paquet, sa version, son registre et son résultat, sans aucun chemin de
-dépendance normale, de compilation ou de test sur toutes les cibles, avec les fonctionnalités par défaut et toutes celles de
-l'espace de travail. Tout nouveau résultat, toute identité modifiée, tout paquet atteignable, toute analyse en échec et toute
-exception obsolète font échouer la CI. Supprimez une exception dans la même PR que celle qui supprime son résultat ; une
-liste d'exceptions vide exige un audit propre. `cargo audit` brut rapporte toujours ces résultats : cette politique documente
-et vérifie leur dormance, et n'affirme pas que les versions vulnérables ou retirées ont été corrigées.
-Les [paramètres d'audit](.cargo/audit.toml) du projet maintiennent la récupération des avis et les vérifications
-de versions retirées activées, et remplacent la configuration globale d'audit du développeur. N'ajoutez ni exclusions d'avis ni filtres d'analyse.
-Le vérificateur exécute aussi un audit au format terminal pour détecter les défaillances de registre que cargo-audit 0.22.2
-peut omettre dans la sortie JSON, afin qu'une analyse de paquets retirés indisponible ne compte pas comme un résultat propre.
+La [politique d'audit](.ci/cargo-audit-policy.toml) consigne des exceptions exactes pour les entrées
+dormantes `rsa` et `spin`. Les champs `package`, `version`, `source`, `kind` et `finding` doivent
+correspondre. Aucun chemin de dépendance `normal`, `build` ou `dev` ne doit exister sur aucune cible,
+avec les fonctionnalités par défaut ou toutes celles de l'espace de travail. Cargo appelle les
+dépendances de développement `dev-dependencies`.
+
+Les nouveaux résultats, identités modifiées, paquets atteignables, analyses en échec et exceptions
+obsolètes font échouer la CI. Supprimez chaque exception dans la PR qui supprime son résultat.
+Une liste vide exige un audit propre. Le vérificateur renvoie 0 en cas de succès et 1 en cas d'échec
+de la politique ou de l'analyse. `cargo audit` rapporte toujours les résultats dormants ;
+les exceptions ne corrigent pas les versions vulnérables ou retirées.
+
+Les [paramètres d'audit](.cargo/audit.toml) maintiennent la récupération des avis et les vérifications
+des versions retirées, et remplacent la configuration globale du développeur.
+N'ajoutez ni exclusions d'avis ni filtres d'analyse.
+
+Le mode JSON de cargo-audit 0.22.2 peut omettre silencieusement les vérifications des versions
+retirées. Une analyse indépendante au format terminal est donc exigée, sans erreur de registre
+et avec des identités de résultats correspondantes. Cela établit une analyse distincte réussie,
+sans prouver que l'analyse JSON précédente s'est terminée.
 
 Le contrôle inter-implémentations prouve que les compilations native et WASM concordent : le texte chiffré produit en natif
 se déchiffre à l'octet près en WASM à partir de vecteurs de référence partagés :

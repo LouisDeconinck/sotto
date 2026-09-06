@@ -208,7 +208,8 @@ Die Lieferketten-Richtlinie steht in `deny.toml` und wird in der CI mit
 cargo deny check
 ```
 
-Der vollständige Lockfile-Audit läuft ebenfalls im `supply-chain`-CI-Job (Python 3.11+ erforderlich):
+Der vollständige Lockfile-Audit läuft ebenfalls im `supply-chain`-CI-Job.
+Python 3.11 oder neuer ist erforderlich; die CI verwendet 3.12. cargo-audit muss genau 0.22.2 sein:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -217,16 +218,22 @@ scripts/check-cargo-audit
 ```
 
 Die [Audit-Richtlinie](.ci/cargo-audit-policy.toml) dokumentiert exakte Ausnahmen für ruhende `rsa`- und
-`spin`-Lockfile-Einträge. Jede muss in Paket, Version, Registry und Befund übereinstimmen und darf über alle Targets,
-mit Standard- und allen Workspace-Features, keinen normalen, Build- oder Test-Abhängigkeitspfad haben. Neue Befunde,
-geänderte Identitäten, erreichbare Pakete, fehlgeschlagene Scans und veraltete Ausnahmen lassen die CI fehlschlagen.
-Entferne eine Ausnahme im selben PR, der ihren Befund entfernt; eine leere Ausnahmeliste erfordert einen sauberen Audit.
-Rohes `cargo audit` meldet diese Befunde weiterhin: Diese Richtlinie dokumentiert und verifiziert deren Ruhezustand und
-behauptet nicht, dass die verwundbaren oder zurückgezogenen Releases behoben wurden. Die [Audit-Standards](.cargo/audit.toml)
-des Projekts lassen Advisory-Abruf und Yanked-Prüfungen aktiviert und überschreiben die globale Audit-Konfiguration
-der Entwickler. Füge keine Advisory-Ignorierungen oder Scan-Filter hinzu. Der Prüfer führt außerdem einen Audit im
-Terminal-Format aus, um Registry-Fehler zu erkennen, die cargo-audit 0.22.2 in der JSON-Ausgabe auslassen kann, sodass
-ein unverfügbarer Yanked-Paket-Scan nicht als sauberes Ergebnis zählt.
+`spin`-Lockfile-Einträge. `package`, `version`, `source`, `kind` und `finding` müssen übereinstimmen.
+Über alle Targets darf mit Standard- und allen Workspace-Features kein Abhängigkeitspfad vom Typ
+`normal`, `build` oder `dev` bestehen. Cargos Entwicklerabhängigkeiten heißen `dev-dependencies`.
+
+Neue Befunde, geänderte Identitäten, erreichbare Pakete, fehlgeschlagene Scans und veraltete Ausnahmen
+lassen die CI fehlschlagen. Entferne eine Ausnahme im selben PR, der ihren Befund entfernt.
+Eine leere Ausnahmeliste erfordert einen sauberen Audit. Der Prüfer beendet sich bei Erfolg mit 0,
+bei Richtlinien- oder Scanfehlern mit 1. Rohes `cargo audit` meldet die ruhenden Befunde weiterhin;
+die Ausnahmen beheben die verwundbaren oder zurückgezogenen Releases nicht.
+
+Die [Audit-Standards](.cargo/audit.toml) aktivieren Advisory-Abruf und Yanked-Prüfungen und
+überschreiben die globale Audit-Konfiguration. Füge keine Advisory-Ausnahmen oder Scan-Filter hinzu.
+
+Der JSON-Modus von cargo-audit 0.22.2 kann Yanked-Prüfungen stillschweigend überspringen. Deshalb
+verlangt der Prüfer einen unabhängigen Terminal-Scan ohne Registry-Fehler und mit übereinstimmenden
+Befundidentitäten. Dies belegt einen separaten erfolgreichen Scan, nicht den Abschluss des JSON-Scans.
 
 Das implementationsübergreifende Gate beweist, dass native und WASM-Builds übereinstimmen: nativ erzeugtes Chiffrat
 entschlüsselt in WASM Byte für Byte aus gemeinsamen Referenzvektoren:
