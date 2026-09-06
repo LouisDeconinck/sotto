@@ -185,8 +185,9 @@ One-time setup, any provider:
    younger than 26 hours?** That threshold exceeds a full day on purpose, so a single missed night
    breaches it rather than hiding inside it. Run it anywhere except the host, because a host that
    has stopped taking backups cannot be relied on to report that it has. Have it ping a heartbeat
-   URL when it passes, so an external checker alerts you when the pings stop; alerting only on
-   failure cannot report the checker's own death, which is the failure that hides longest.
+   URL when it passes, so any external checker (e.g. a free UptimeRobot heartbeat monitor) alerts
+   you when the pings stop; alerting only on failure cannot report the checker's own death, which
+   is the failure that hides longest.
 
    [`backup-freshness.yml`](../.github/workflows/backup-freshness.yml) is that check as a worked
    example, for `gs://` destinations, running daily on GitHub Actions. It lists object names and

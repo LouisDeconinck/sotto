@@ -134,9 +134,10 @@ jobs:
           fi
 
       - name: Send the heartbeat
-        # Only on success, and only when a heartbeat is configured. The monitoring service alerts
-        # when these stop arriving, which is what catches this workflow being disabled, throttled
-        # or quietly broken - the failure mode an alert-on-error design cannot see.
+        # Only on success, and only when a heartbeat is configured. Whichever external checker owns
+        # that URL alerts when these stop arriving, which is what catches this workflow being
+        # disabled, throttled or quietly broken - the failure mode an alert-on-error design cannot
+        # see.
         if: steps.config.outputs.configured == 'true' && steps.check.outputs.healthy == 'true'
         env:
           HEARTBEAT_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
