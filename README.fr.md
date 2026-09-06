@@ -221,8 +221,8 @@ scripts/check-cargo-audit
 La [politique d'audit](.ci/cargo-audit-policy.toml) consigne des exceptions exactes pour les entrées
 dormantes `rsa` et `spin`. Les champs `package`, `version`, `source`, `kind` et `finding` doivent
 correspondre. Aucun chemin de dépendance `normal`, `build` ou `dev` ne doit exister sur aucune cible,
-avec les fonctionnalités par défaut ou toutes celles de l'espace de travail. Cargo appelle les
-dépendances de développement `dev-dependencies`.
+avec les fonctionnalités par défaut ou toutes celles de l'espace de travail. Les arêtes `dev` de Cargo
+correspondent aux `dev-dependencies`.
 
 Les nouveaux résultats, identités modifiées, paquets atteignables, analyses en échec et exceptions
 obsolètes font échouer la CI. Supprimez chaque exception dans la PR qui supprime son résultat.

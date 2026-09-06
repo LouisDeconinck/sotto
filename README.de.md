@@ -220,7 +220,7 @@ scripts/check-cargo-audit
 Die [Audit-Richtlinie](.ci/cargo-audit-policy.toml) dokumentiert exakte Ausnahmen für ruhende `rsa`- und
 `spin`-Lockfile-Einträge. `package`, `version`, `source`, `kind` und `finding` müssen übereinstimmen.
 Über alle Targets darf mit Standard- und allen Workspace-Features kein Abhängigkeitspfad vom Typ
-`normal`, `build` oder `dev` bestehen. Cargos Entwicklerabhängigkeiten heißen `dev-dependencies`.
+`normal`, `build` oder `dev` bestehen. Cargos `dev`-Kanten entsprechen `dev-dependencies`.
 
 Neue Befunde, geänderte Identitäten, erreichbare Pakete, fehlgeschlagene Scans und veraltete Ausnahmen
 lassen die CI fehlschlagen. Entferne eine Ausnahme im selben PR, der ihren Befund entfernt.

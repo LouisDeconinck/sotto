@@ -221,7 +221,7 @@ scripts/check-cargo-audit
 La [política de auditoría](.ci/cargo-audit-policy.toml) registra excepciones exactas para las entradas
 inactivas `rsa` y `spin`. Deben coincidir `package`, `version`, `source`, `kind` y `finding`.
 No debe haber rutas de dependencia `normal`, `build` ni `dev` en ningún destino, con las features
-por defecto y todas las del espacio de trabajo. Cargo llama `dev-dependencies` a las de desarrollo.
+por defecto y todas las del espacio de trabajo. Las aristas `dev` corresponden a `dev-dependencies`.
 
 Nuevos hallazgos, identidades cambiadas, paquetes alcanzables, análisis fallidos y excepciones
 obsoletas hacen fallar CI. Elimina cada excepción en el mismo PR que elimine su hallazgo.
