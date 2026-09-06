@@ -191,6 +191,8 @@ def verify_registry_scan(root, findings):
     terminal_findings = set()
     for block in re.split(r"(?m)^Crate:\s*", scan.stdout)[1:]:
         lines = block.splitlines()
+        if not lines:
+            raise PolicyError("incomplete terminal finding")
         name = lines[0].strip()
         fields = {}
         for line in lines[1:]:

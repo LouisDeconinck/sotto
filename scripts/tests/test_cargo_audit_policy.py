@@ -238,6 +238,7 @@ class PolicyTest(unittest.TestCase):
     def test_incomplete_or_duplicate_terminal_findings_fail(self):
         original = self.terminal_findings
         for findings in (
+            original + "Crate: ",
             original.replace("Version:   0.9.10\n", ""),
             original + original,
             original.replace("ID:        RUSTSEC-2023-0071\n", ""),
