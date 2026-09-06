@@ -204,6 +204,11 @@ One-time setup, any provider:
 
    ```sh
    # Google Cloud:
+   # Federating the identity is not enough on its own. Exchanging the OIDC token for one the
+   # service account can use goes through this API, so a project that has never enabled it fails
+   # at that last hop only, long after the pool and the binding both look correct.
+   gcloud services enable iamcredentials.googleapis.com
+
    gcloud iam workload-identity-pools create github --location=global
    gcloud iam workload-identity-pools providers create-oidc github \
      --location=global --workload-identity-pool=github \
