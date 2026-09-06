@@ -123,20 +123,26 @@ jobs:
           # takes the step with it under set -e, silently disabling the alert.
           GH_REPO: ${{ github.repository }}
           TITLE: "Backups are stale"
+          LABEL: backup-alert
           REASON: ${{ steps.check.outputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # Match on title rather than a label so the workflow does not depend on repository labels
-          # existing. One open issue per outage, with each run appended, rather than a daily pile.
-          existing="$(gh issue list --state open --search "in:title \"$TITLE\"" \
+          # Identify our own alert by label, not by title. Title search is token based, so a human
+          # issue mentioning stale backups would be adopted, commented on, and later closed by this
+          # workflow. A label is exact and only this job applies it. --force makes creating it
+          # idempotent, so the workflow carries its own dependency rather than assuming setup.
+          gh label create "$LABEL" --force \
+            --color B60205 --description "Raised automatically when backups stop arriving"
+
+          existing="$(gh issue list --state open --label "$LABEL" \
             --json number --jq '.[0].number // empty')"
           body="$(printf '%s\n\nChecked by [this run](%s).' "$REASON" "$RUN_URL")"
 
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
-            gh issue create --title "$TITLE" --body "$body"
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$body"
           fi
           exit 1
 
@@ -150,11 +156,15 @@ jobs:
           # deliberately does not check out the tree, so without GH_REPO every gh call fails and
           # takes the step with it under set -e, silently disabling the alert.
           GH_REPO: ${{ github.repository }}
-          TITLE: "Backups are stale"
+          LABEL: backup-alert
         run: |
           set -euo pipefail
-          existing="$(gh issue list --state open --search "in:title \"$TITLE\"" \
-            --json number --jq '.[0].number // empty')"
-          if [ -n "$existing" ]; then
-            gh issue close "$existing" --comment "Backups are fresh again."
-          fi
+          # Close every open alert, not just the newest. Taking only the first would leave any
+          # duplicate open for ever, still claiming an outage that ended. Tolerate the label not
+          # existing yet: on a healthy instance nothing has ever created it, and a healthy day must
+          # never fail this job.
+          open_alerts="$(gh issue list --state open --label "$LABEL" \
+            --json number --jq '.[].number' 2>/dev/null || true)"
+          for number in $open_alerts; do
+            gh issue close "$number" --comment "Backups are fresh again."
+          done
