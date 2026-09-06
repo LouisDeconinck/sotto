@@ -118,6 +118,10 @@ jobs:
         if: steps.config.outputs.configured == 'true' && steps.check.outputs.healthy == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh resolves the repository from a git remote and ignores GITHUB_REPOSITORY. This job
+          # deliberately does not check out the tree, so without GH_REPO every gh call fails and
+          # takes the step with it under set -e, silently disabling the alert.
+          GH_REPO: ${{ github.repository }}
           TITLE: "Backups are stale"
           REASON: ${{ steps.check.outputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -142,6 +146,10 @@ jobs:
         if: steps.config.outputs.configured == 'true' && steps.check.outputs.healthy == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh resolves the repository from a git remote and ignores GITHUB_REPOSITORY. This job
+          # deliberately does not check out the tree, so without GH_REPO every gh call fails and
+          # takes the step with it under set -e, silently disabling the alert.
+          GH_REPO: ${{ github.repository }}
           TITLE: "Backups are stale"
         run: |
           set -euo pipefail
