@@ -41,14 +41,16 @@ jobs:
       - name: Check whether monitoring is configured
         id: config
         env:
-          BUCKET: ${{ vars.BACKUP_BUCKET }}
+          # The same destination the host already writes to, named and spelled the same way, so
+          # there is one bucket setting in this project rather than two that can disagree.
+          DESTINATION: ${{ vars.SOTTO_BACKUP_BUCKET }}
           PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           SERVICE_ACCOUNT: ${{ vars.GCP_MONITOR_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           # Skip rather than fail when unconfigured, so adding this workflow cannot turn a healthy
           # repository red before the one-time cloud setup has been done.
-          if [ -z "$BUCKET" ] || [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
+          if [ -z "$DESTINATION" ] || [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "Backup monitoring is not configured; see deploy/README.md section Backups." >&2
           else
@@ -68,7 +70,7 @@ jobs:
         id: check
         if: steps.config.outputs.configured == 'true'
         env:
-          BUCKET: ${{ vars.BACKUP_BUCKET }}
+          DESTINATION: ${{ vars.SOTTO_BACKUP_BUCKET }}
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           # One missed night must breach this, so it has to exceed the interval between the backup
           # and this check plus a full day. Deliberately a constant: the figure is derived from the
@@ -78,12 +80,27 @@ jobs:
         run: |
           set -euo pipefail
 
+          # backup.sh dispatches on the destination scheme; read the same setting the same way so
+          # the two cannot drift.
+          bucket="${DESTINATION#gs://}"
+          bucket="${bucket%%/*}"
+
+          # Refuse anything that is not a plain bucket name before it reaches a URL path. Bucket
+          # names cannot contain these characters, so a value that does is a misconfiguration, and
+          # interpolating it unchecked would be the beginnings of a request forgery.
+          case "$bucket" in
+            "" | *[!a-z0-9._-]*)
+              echo "SOTTO_BACKUP_BUCKET does not name a usable bucket: ${DESTINATION}" >&2
+              exit 1
+              ;;
+          esac
+
           # The JSON API rather than a CLI: no tool to install, and a stable contract to parse.
           # `fields` keeps the response to what is asked, so no backup content is requested even
           # accidentally. A 30-day lifecycle keeps the object count far below one page.
           response="$(curl -fsS \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            "https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?fields=items(name,timeCreated)")"
+            "https://storage.googleapis.com/storage/v1/b/${bucket}/o?fields=items(name,timeCreated)")"
 
           newest="$(printf '%s' "$response" | jq -r '[.items[]?.timeCreated] | max // empty')"
           if [ -z "$newest" ]; then

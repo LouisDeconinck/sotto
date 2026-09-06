@@ -191,9 +191,10 @@ One-time setup, any provider:
    It lists object names and creation times. It never fetches a backup, and the identity it uses
    holds no permission that would let it, so the append-only posture above is unaffected.
 
-   Configure it with repository variables `BACKUP_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and
-   `GCP_MONITOR_SERVICE_ACCOUNT`, plus a repository secret `BACKUP_HEARTBEAT_URL`. Until all three
-   variables are set the job skips rather than failing.
+   Configure it with repository variables `SOTTO_BACKUP_BUCKET` (the same value as in `.env`,
+   scheme included), `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_MONITOR_SERVICE_ACCOUNT`, plus a
+   repository secret `BACKUP_HEARTBEAT_URL`. Until all three variables are set the job skips
+   rather than failing.
 
    Grant the identity by federation rather than by issuing a key, so that no long lived credential
    exists to leak or rotate:
