@@ -395,7 +395,9 @@ build needs the RAM headroom noted under [First deployment](#first-deployment).
 
 **Verify**, before repeating any of this on production:
 
-- `https://<SOTTO_DOMAIN>/health` returns `ok`;
+- `https://<SOTTO_DOMAIN>/health/ready` returns `ok`, which is the check to make here rather than
+  `/health`: everything below this line is stored in Postgres, and `/health` answers the same
+  whether the deployment can reach it or not (see [Uptime monitoring](#uptime-monitoring));
 - the protected metrics endpoint answers `200` with its token and `401` with a missing or wrong
   one; a `503` instead means its token is not configured, so prerequisite 2 is unmet;
 - the operator observation endpoint answers `401` for a missing token, for a wrong one, and for
