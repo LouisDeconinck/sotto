@@ -23,6 +23,12 @@
 //! misses share a single in-flight query. A monitor checking every few minutes therefore always
 //! measures afresh, while a flood costs at most one query per [`TTL`] no matter how many callers
 //! it comes from or how many addresses they hold.
+//!
+//! What that caps is the load on Postgres, which is the resource worth protecting here and the
+//! one the pool makes scarce. It does not cap the requests themselves: while a check is in
+//! flight, everyone who arrives waits for it, so against a database that hangs rather than
+//! refuses they wait up to [`TIMEOUT`] before being handed the same verdict. Waiting on a mutex
+//! costs a task rather than a connection, which is the trade being made deliberately.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
