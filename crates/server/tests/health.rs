@@ -5,12 +5,13 @@
 //! condition worth asserting: this is the endpoint whose whole reason for existing is to go red
 //! when `/health` stays green.
 
+use std::str::FromStr;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
@@ -18,8 +19,22 @@ use sotto_server::config::DEFAULT_ORGANISATION_DELETION_RETENTION_DAYS;
 use sotto_server::db;
 use sotto_server::state::AppState;
 
+/// The house contract for a test that touches a database, per `docs/CLAUDE.md`: an explicit
+/// opt-in, and a refusal to run against anything but a local host. `DATABASE_URL` alone is not
+/// enough of a signal, because the quickstart tells developers to export it, and this helper runs
+/// migrations. A plain `cargo test --workspace` on that shell must not write to whatever it names.
 async fn pool_or_skip() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
+    if std::env::var("SOTTO_RUN_DB_TESTS").as_deref() != Ok("1") {
+        eprintln!("skipping: SOTTO_RUN_DB_TESTS=1 not set");
+        return None;
+    }
+    let options = PgConnectOptions::from_str(&url).expect("parse DATABASE_URL");
+    assert!(
+        matches!(options.get_host(), "localhost" | "127.0.0.1" | "::1"),
+        "refusing to run migrations against non-local host: {}",
+        options.get_host()
+    );
     let pool = db::connect(&url).await.expect("connect");
     db::migrate(&pool).await.expect("migrate");
     Some(pool)
