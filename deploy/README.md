@@ -70,8 +70,13 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 Smoke test:
 
 ```sh
-curl -fsS https://<your-domain>/health    # → ok
+curl -fsS https://<your-domain>/health          # → ok    the process is up
+curl -fsS https://<your-domain>/health/ready    # → ok    and it can reach Postgres
 ```
+
+The second is the one that catches a first deployment wired to the wrong database: the process
+starts and serves `/health` regardless, so only the readiness probe fails when `DATABASE_URL` is
+wrong. See [Uptime monitoring](#uptime-monitoring).
 
 Then open `https://<your-domain>` in a browser and sign in with GitHub. Point the CLI at your
 instance with `sotto login --server https://<your-domain>`.
@@ -300,9 +305,31 @@ docker compose -f docker-compose.prod.yml exec caddy \
 
 ## Uptime monitoring
 
-`GET /health` returns `ok` with no auth and no rate limit - point any external checker at
-`https://<SOTTO_DOMAIN>/health` (e.g. a free UptimeRobot monitor, 5-minute interval, keyword
-`ok`). Alerting from *outside* the box is the point: a dead VM cannot report itself.
+Point the monitor at **`GET /health/ready`**, not at `/health`. Both are unauthenticated and both
+return `ok` with a `200`, and the difference only shows up on the day it matters:
+
+| Path            | Answers                                   | Reports a database outage |
+| --------------- | ----------------------------------------- | ------------------------- |
+| `/health`       | is this process running?                  | no                        |
+| `/health/ready` | can this instance serve a request?        | yes, `503 unavailable`    |
+
+Postgres holds every secret, session and project, so an outage there fails every real request.
+`/health` never touches it, and a checker watching that path stays green for the whole outage. The
+readiness probe makes an explicit round trip to the database and returns `503` with the body
+`unavailable` when it cannot.
+
+Configure any external checker against `https://<SOTTO_DOMAIN>/health/ready` (e.g. a free
+UptimeRobot monitor, 5-minute interval, keyword `ok`). Alerting from *outside* the box is the
+point: a dead VM cannot report itself.
+
+Two properties are worth knowing before tuning the interval. The verdict is cached for a second
+and concurrent checks share one query, so probing more often costs the database nothing extra but
+also tells you nothing extra. And the check gives up after five seconds, so a database that hangs
+rather than refuses is reported as unavailable rather than holding the request open.
+
+`/health` is still there and still worth a second monitor if you want to tell "the box is gone"
+apart from "the box is up and the database is not". Keep it pointed at `/health` for that
+distinction to mean anything.
 
 ## Organisation-deletion metrics
 
@@ -368,7 +395,9 @@ build needs the RAM headroom noted under [First deployment](#first-deployment).
 
 **Verify**, before repeating any of this on production:
 
-- `https://<SOTTO_DOMAIN>/health` returns `ok`;
+- `https://<SOTTO_DOMAIN>/health/ready` returns `ok`, which is the check to make here rather than
+  `/health`: everything below this line is stored in Postgres, and `/health` answers the same
+  whether the deployment can reach it or not (see [Uptime monitoring](#uptime-monitoring));
 - the protected metrics endpoint answers `200` with its token and `401` with a missing or wrong
   one; a `503` instead means its token is not configured, so prerequisite 2 is unmet;
 - the operator observation endpoint answers `401` for a missing token, for a wrong one, and for

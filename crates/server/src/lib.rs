@@ -27,6 +27,7 @@ pub mod db;
 pub mod encoding;
 pub mod entitlements;
 pub mod error;
+pub mod health;
 pub mod machine;
 pub mod org;
 // The lifecycle seam, HTTP adapter, and worker remain doc-hidden: deletion is enabled per
@@ -49,7 +50,6 @@ pub mod state;
 pub mod sync;
 pub mod telemetry;
 
-use axum::routing::get;
 use axum::Router;
 
 use crate::state::AppState;
@@ -70,7 +70,7 @@ pub fn app(state: AppState) -> Router {
         Router::new()
     };
     Router::new()
-        .route("/health", get(health))
+        .merge(health::router())
         .merge(auth::router())
         .merge(audit::router())
         .merge(entitlements::router())
@@ -86,8 +86,4 @@ pub fn app(state: AppState) -> Router {
         .merge(org_deletion_ops::router())
         .merge(organisation_deletion)
         .with_state(state)
-}
-
-async fn health() -> &'static str {
-    "ok"
 }
