@@ -14,9 +14,14 @@ name: Backup freshness
 
 on:
   schedule:
-    # 09:00 UTC, hours after the 02:17 backup. The gap is deliberate: checking straight after the
+    # 09:43 UTC, hours after the 02:17 backup. The gap is deliberate: checking straight after the
     # window would leave a single missed night inside the freshness threshold and therefore silent.
-    - cron: "0 9 * * *"
+    #
+    # The odd minute is deliberate too. GitHub queues scheduled workflows rather than guaranteeing
+    # them, and names the top of the hour as its heaviest load, where runs are delayed and can be
+    # dropped altogether. A round time is the one thing a daily check cannot afford, since a job
+    # that silently does not run is indistinguishable from a job that ran and found nothing wrong.
+    - cron: "43 9 * * *"
   workflow_dispatch:
 
 permissions:
