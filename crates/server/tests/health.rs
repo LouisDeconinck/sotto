@@ -1,0 +1,93 @@
+//! Probe tests: that liveness and readiness disagree when the database is gone.
+//!
+//! The unreachable case needs no database of its own. A lazily connected pool pointed at a closed
+//! port fails on first use exactly as a pool pointed at a stopped Postgres would, which is the
+//! condition worth asserting: this is the endpoint whose whole reason for existing is to go red
+//! when `/health` stays green.
+
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::Router;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use tower::ServiceExt;
+
+use sotto_server::config::DEFAULT_ORGANISATION_DELETION_RETENTION_DAYS;
+use sotto_server::db;
+use sotto_server::state::AppState;
+
+async fn pool_or_skip() -> Option<PgPool> {
+    let url = std::env::var("DATABASE_URL").ok()?;
+    let pool = db::connect(&url).await.expect("connect");
+    db::migrate(&pool).await.expect("migrate");
+    Some(pool)
+}
+
+/// A pool that parses but can never connect. Port 1 is reserved and never listening, so the
+/// attempt is refused immediately rather than hanging; the short acquire timeout is belt and
+/// braces in case a platform makes it wait instead.
+fn unreachable_pool() -> PgPool {
+    PgPoolOptions::new()
+        .acquire_timeout(Duration::from_secs(2))
+        .connect_lazy("postgres://sotto:sotto@127.0.0.1:1/sotto")
+        .expect("a well-formed url")
+}
+
+fn app(pool: PgPool) -> Router {
+    let state = AppState {
+        pool,
+        oauth: None,
+        oauth_config: None,
+        billing: None,
+        telemetry_ingest: false,
+        organisation_deletion_enabled: false,
+        organisation_deletion_retention_days: DEFAULT_ORGANISATION_DELETION_RETENTION_DAYS,
+        organisation_deletion_metrics_token: None,
+        organisation_deletion_operator_token: None,
+    };
+    sotto_server::app(state)
+}
+
+async fn get(app: &Router, path: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn liveness_ignores_the_database() {
+    // The point of keeping `/health` unchanged: it answers for the process, so a database it never
+    // touches cannot take it down.
+    let (status, body) = get(&app(unreachable_pool()), "/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "ok");
+}
+
+#[tokio::test]
+async fn readiness_reports_an_unreachable_database() {
+    let (status, body) = get(&app(unreachable_pool()), "/health/ready").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body, "unavailable",
+        "the body names no dependency and no error"
+    );
+}
+
+#[tokio::test]
+async fn readiness_passes_against_a_real_database() {
+    let Some(pool) = pool_or_skip().await else {
+        return;
+    };
+    let (status, body) = get(&app(pool), "/health/ready").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "ok");
+}
