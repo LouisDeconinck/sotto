@@ -223,6 +223,58 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_misses_share_one_check() {
+        // The single-flight rule is the half of the mitigation the sequential tests above cannot
+        // reach: without it a flood arriving inside one TTL takes a pooled connection each, which
+        // is the amplification this endpoint would otherwise be. Replacing the lock with a plain
+        // check-then-act, or dropping the second `fresh()` read, still passes every test above.
+        //
+        // The check sleeps so that callers genuinely overlap rather than tidily queueing. Note
+        // that neither assertion depends on the overlap actually happening: if the runtime somehow
+        // ran the tasks one at a time the test would prove less, but it cannot fail for it, so
+        // there is no sleep here that CI can lose a race against.
+        let probe = Probe::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicUsize::new(0));
+        let most_at_once = Arc::new(AtomicUsize::new(0));
+
+        let callers: Vec<_> = (0..16)
+            .map(|_| {
+                let probe = probe.clone();
+                let calls = calls.clone();
+                let running = running.clone();
+                let most_at_once = most_at_once.clone();
+                tokio::spawn(async move {
+                    probe
+                        .verdict(|| async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                            most_at_once.fetch_max(now, Ordering::SeqCst);
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            running.fetch_sub(1, Ordering::SeqCst);
+                            true
+                        })
+                        .await
+                })
+            })
+            .collect();
+
+        for caller in callers {
+            assert!(caller.await.unwrap(), "every caller gets the same verdict");
+        }
+        assert_eq!(
+            most_at_once.load(Ordering::SeqCst),
+            1,
+            "two checks must never hold a connection at the same time"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "waiters must take the verdict the holder stored, not run their own"
+        );
+    }
+
     #[test]
     fn the_body_says_only_up_or_down() {
         assert_eq!(respond(true), (StatusCode::OK, "ok"));
