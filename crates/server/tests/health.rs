@@ -25,9 +25,12 @@ async fn pool_or_skip() -> Option<PgPool> {
     Some(pool)
 }
 
-/// A pool that parses but can never connect. Port 1 is reserved and never listening, so the
-/// attempt is refused immediately rather than hanging; the short acquire timeout is belt and
-/// braces in case a platform makes it wait instead.
+/// A pool that parses but cannot reach a Postgres.
+///
+/// Nothing needs to be true about port 1 for this to hold. Normally nothing is listening there and
+/// the connection is refused at once, but a listener would not speak the Postgres protocol either,
+/// so the handshake fails and the verdict is the same. The short acquire timeout bounds the only
+/// thing that varies, which is how long the failure takes to arrive.
 fn unreachable_pool() -> PgPool {
     PgPoolOptions::new()
         .acquire_timeout(Duration::from_secs(2))
