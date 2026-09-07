@@ -311,7 +311,7 @@ return `ok` with a `200`, and the difference only shows up on the day it matters
 | Path            | Answers                                   | Reports a database outage |
 | --------------- | ----------------------------------------- | ------------------------- |
 | `/health`       | is this process running?                  | no                        |
-| `/health/ready` | can this instance serve a request?         | yes, `503 unavailable`    |
+| `/health/ready` | can this instance serve a request?        | yes, `503 unavailable`    |
 
 Postgres holds every secret, session and project, so an outage there fails every real request.
 `/health` never touches it, and a checker watching that path stays green for the whole outage. The
