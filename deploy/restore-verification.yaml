@@ -42,9 +42,18 @@ steps:
       - |
         set -euo pipefail
         bucket="${_BACKUP_BUCKET}"
+        # backup.sh writes to gs://, s3:// and rclone remotes, and this file is a Cloud Build
+        # config, so it can only speak the first. That is a limit of the vehicle rather than of
+        # the drill: the same three commands run against any store, and the runbook shows them.
+        # Say which, and where to look, rather than leaving someone to read this as their
+        # storage being unsupported.
         case "$$bucket" in
           gs://*) ;;
-          *) echo "_BACKUP_BUCKET must be a gs:// URL, got: $${bucket}" >&2; exit 1 ;;
+          *)
+            echo "This config restores from gs:// destinations. For $${bucket%%:*}, run the" >&2
+            echo "same drill from any scheduler; see deploy/README.md, Doing it by hand." >&2
+            exit 1
+            ;;
         esac
         # Newest by creation time, which is what backup.sh stamps into the name as well. The
         # listing is names and times only: no object is read to choose one.
