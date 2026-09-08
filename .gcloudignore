@@ -1,0 +1,12 @@
+# What `gcloud builds submit` should not upload when running the restore drill by hand.
+#
+# gcloud falls back to the top-level .gitignore when this file is absent, and that fallback does
+# not read nested ones, so web/node_modules would be uploaded on every run. The build needs the
+# scripts and the migrations directory and nothing else large.
+
+.git/
+target/
+**/node_modules/
+web/dist/
+web/src/wasm/
+**/.wasm-node/
