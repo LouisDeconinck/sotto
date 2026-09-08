@@ -210,12 +210,17 @@ jobs:
             exit 1
           fi
 
-          # One tolerated failure, named rather than a list of forbidden ones. A fresh database
-          # can legitimately have no rows in it, and what a test run leaves behind is not this
-          # job's business; every other complaint, and every crash, is.
-          if [ "$status" -ne 0 ] && ! grep -q "restored but empty" check.log; then
-            echo "the restore checker disagreed with a freshly migrated database" >&2
-            exit 1
+          # One tolerated failure, and only when it is the whole of what went wrong. A fresh
+          # database can legitimately have no rows in it, and what a test run leaves behind is
+          # not this job's business. Everything else is: a missing deletion table alongside an
+          # empty one must not ride in on the empty one's excuse, so every complaint has to be
+          # that complaint, and a non-zero exit with no complaint at all is a crash.
+          if [ "$status" -ne 0 ]; then
+            if ! grep -q "^FAIL:" check.log \
+               || grep "^FAIL:" check.log | grep -qv "restored but empty"; then
+              echo "the restore checker disagreed with a freshly migrated database" >&2
+              exit 1
+            fi
           fi
 
   funnel-e2e:
