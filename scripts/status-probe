@@ -258,12 +258,16 @@ def merge(summary: dict, outcomes: dict[str, Outcome], now: dt.datetime) -> dict
         component["state"] = outcome.state
         component["detail"] = outcome.detail
         component["checked_at"] = now.isoformat().replace("+00:00", "Z")
+        days = {d["date"]: d for d in component.get("days", [])}
         if outcome.state in (OK, DOWN):
-            days = {d["date"]: d for d in component.get("days", [])}
             tally = days.setdefault(day, {"date": day, "ok": 0, "total": 0})
             tally["total"] += 1
             tally["ok"] += 1 if outcome.state == OK else 0
-            component["days"] = trim(days, now.date())
+        # Trim on every round, not only on a conclusive one. A component that stops being
+        # configured stops adding days but keeps the ones it has, so trimming inside the
+        # branch above would freeze its history at the moment it went quiet and leave the
+        # summary claiming a ninety day horizon it no longer keeps.
+        component["days"] = trim(days, now.date())
         components.append(component)
 
     for declared in UNPROBED:

@@ -160,6 +160,23 @@ class Summary(unittest.TestCase):
         self.assertEqual(sync["state"], probe.UNCONFIGURED)
         self.assertEqual(sync["days"], [])
 
+    def test_history_keeps_ageing_after_a_component_stops_being_probed(self):
+        # A deployment that drops Stripe stops producing conclusive billing samples but keeps
+        # the days it already has. If those only aged while samples arrived, the row would
+        # freeze at the moment it went quiet and the summary would keep publishing days from
+        # outside the window it claims to hold.
+        summary = probe.empty_summary()
+        for i in range(probe.RETAINED_DAYS + 5):
+            when = NOW - dt.timedelta(days=probe.RETAINED_DAYS + 4 - i)
+            summary = probe.merge(summary, {"billing": probe.Outcome(probe.OK)}, when)
+        for i in range(30):
+            summary = probe.merge(summary, {"billing": probe.Outcome(probe.UNCONFIGURED)}, NOW + dt.timedelta(days=i))
+
+        billing = next(c for c in summary["components"] if c["id"] == "billing")
+        last = (NOW + dt.timedelta(days=29)).date()
+        horizon = (last - dt.timedelta(days=probe.RETAINED_DAYS - 1)).isoformat()
+        self.assertEqual(billing["days"][0]["date"], horizon)
+
     def test_days_older_than_the_horizon_fall_off(self):
         days = {
             "2026-01-01": {"date": "2026-01-01", "ok": 1, "total": 1},
