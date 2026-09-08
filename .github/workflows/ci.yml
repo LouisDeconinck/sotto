@@ -191,6 +191,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Server + end-to-end tests (with Postgres)
         run: cargo test -p sotto-server -p sotto-cli
+      - name: Restore checker meets a real database
+        # Its assertions are unit tested, but its queries are not: left alone they would only
+        # ever meet a database when the monthly restore runs, which is a poor place to discover
+        # a typo. The schema here is the one a restored dump produces, so running it now proves
+        # every query executes and every structural check passes against the current migrations.
+        run: |
+          set -euo pipefail
+          output="$(scripts/check-restore --database-url "$DATABASE_URL" 2>&1 || true)"
+          printf '%s\n' "$output"
+          # Row counts are not asserted: what a test run leaves behind is not this job's
+          # business. Structure is, and none of these may ever appear against a healthy schema.
+          for unexpected in "recorded as failed" "missing from the restored database" \
+                            "does not:" "no migrations at all"; do
+            if printf '%s' "$output" | grep -q "$unexpected"; then
+              echo "the restore checker disagreed with a freshly migrated database: $unexpected" >&2
+              exit 1
+            fi
+          done
 
   funnel-e2e:
     name: funnel regression suite (Launch gate 4)
