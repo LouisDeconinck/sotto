@@ -58,6 +58,11 @@ class Response:
 class Outcome:
     state: str
     detail: str | None = None
+    #: True when this says something about how the collector is pointed rather than about the
+    #: deployment. Kept apart from `state` because the verdict is still honestly "down" for
+    #: anyone visiting that URL; what differs is who has to fix it, and whether the reading is
+    #: worth writing into a permanent record at all.
+    fault: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,8 +102,12 @@ def misdirected(response: Response) -> Outcome | None:
     counting it would be worse than one that made someone check a URL.
     """
     if response.status in (301, 302, 307, 308):
-        return Outcome(DOWN, f"redirected to {origin_of(header(response, 'location'))}; "
-                             "the base url must be the origin served")
+        return Outcome(
+            DOWN,
+            f"redirected to {origin_of(header(response, 'location'))}; "
+            "the base url must be the origin served",
+            fault=True,
+        )
     return None
 
 
@@ -151,6 +160,13 @@ def judge_signin(response: Response) -> Outcome:
         return Outcome(OK)
     if response.status == 503:
         return Outcome(UNCONFIGURED, "this deployment has no oauth credentials")
+    # Checked after the healthy answer, not before it, because this is the one probe whose
+    # healthy answer is itself a redirect. Reaching here means a redirect that is not the
+    # OAuth one, and when the base URL is wrong that is what this probe sees while the other
+    # three see the same thing; without this it would be the single row that disagreed, and
+    # the refusal below needs every row to agree before it will act.
+    if (astray := misdirected(response)) is not None:
+        return astray
     return Outcome(DOWN, f"expected a redirect to github, got {response.status}")
 
 
@@ -402,13 +418,27 @@ def main() -> int:
 
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     outcomes = observe(args.base_url, PROBES)
-    write(args.data_dir, merge(load(args.data_dir), outcomes, now), sample_lines(outcomes, now), now)
 
     for pid, outcome in sorted(outcomes.items()):
         print(f"{pid}: {outcome.state}" + (f" ({outcome.detail})" if outcome.detail else ""))
+
+    if outcomes and all(o.fault for o in outcomes.values()):
+        # Every component at once, and every one of them for a reason that is about this URL
+        # rather than about the deployment. That is a wrong setting, not an outage, and
+        # writing it down would put ninety days of invented downtime into a record meant to
+        # be trusted. Refuse before writing anything, and fail: a red run stops the heartbeat
+        # that follows it, which is what makes the mistake noticeable at all. A real outage
+        # looks nothing like this, because a deployment that is gone refuses connections
+        # rather than politely redirecting them.
+        print(f"every probe was misdirected; {args.base_url} is not the origin served", file=sys.stderr)
+        return 1
+
+    write(args.data_dir, merge(load(args.data_dir), outcomes, now), sample_lines(outcomes, now), now)
     # Exit zero even when a component is down. This job records what it saw; alerting is the
     # monitoring vendor's job, and a red workflow every time the site blips would train
-    # everyone to ignore the one that means the collector itself is broken.
+    # everyone to ignore the one that means the collector itself is broken. The refusal above
+    # is the exception that proves the rule: it is not reporting an outage, it is declining to
+    # invent one.
     return 0
 
 

@@ -7,6 +7,7 @@ single page app answering for the API is the exact shape of a misconfigured depl
 that looks healthy from outside.
 """
 
+import contextlib
 import datetime as dt
 import importlib.machinery
 import importlib.util
@@ -82,6 +83,58 @@ class WebVerdict(unittest.TestCase):
     def test_a_200_that_is_not_a_page_is_not_the_app(self):
         self.assertEqual(probe.judge_web(response(200, {"content-type": "text/plain"})).state, probe.DOWN)
         self.assertEqual(probe.judge_web(response(502)).state, probe.DOWN)
+
+
+class WrongBaseUrl(unittest.TestCase):
+    """A base URL that redirects takes every row down at once while the job stays green and
+    the heartbeat keeps pinging, so the external alarm the whole design leans on would be
+    confirming health while ninety days of invented downtime accrued. Nothing else in the
+    system can tell that apart from a real outage, so the script has to."""
+
+    def run_probe(self, base_url, data_dir, responses=None):
+        """Drive `main` end to end. With `responses` the network is stubbed; without it the
+        real fetch runs, which is how the outage case below stays a genuine refusal."""
+        argv = ["status-probe", "--base-url", base_url, "--data-dir", data_dir]
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.object(sys, "argv", argv))
+            if responses is not None:
+                stack.enter_context(
+                    unittest.mock.patch.object(probe, "fetch", lambda _base, p: responses[p.id])
+                )
+            return probe.main()
+
+    def test_it_refuses_and_writes_nothing_when_every_probe_redirects(self):
+        redirect = response(301, {"location": "https://www.example.com/"})
+        with tempfile.TemporaryDirectory() as d:
+            code = self.run_probe("https://example.com", d, {p.id: redirect for p in probe.PROBES})
+            self.assertEqual(code, 1, "a red run is what stops the heartbeat that follows")
+            self.assertEqual(list(Path(d).iterdir()), [], "no invented downtime was recorded")
+
+    def test_a_real_outage_is_still_recorded_and_still_reports_success(self):
+        # The distinction that makes the refusal safe: a deployment that is gone refuses
+        # connections, it does not politely redirect them. That must keep being written down,
+        # and must keep heartbeating, because the collector is working perfectly.
+        with tempfile.TemporaryDirectory() as d:
+            code = self.run_probe("http://127.0.0.1:1", d)
+            self.assertEqual(code, 0)
+            summary = probe.load(d)
+            api = next(c for c in summary["components"] if c["id"] == "api")
+            self.assertEqual(api["state"], probe.DOWN)
+            self.assertEqual(api["days"], [{"date": api["days"][0]["date"], "ok": 0, "total": 1}])
+
+    def test_one_redirect_among_working_probes_is_recorded_not_refused(self):
+        # Conservative on purpose. Only every component at once is unambiguous; a single odd
+        # row could be a genuinely misrouted path, which is a real problem worth recording.
+        responses = {
+            "api": response(200, body="ok"),
+            "web": response(200, {"content-type": "text/html"}),
+            "signin": response(303, {"location": "https://github.com/login/oauth/authorize"}),
+            "billing": response(301, {"location": "https://elsewhere.example/"}),
+        }
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.run_probe("https://example.com", d, responses), 0)
+            billing = next(c for c in probe.load(d)["components"] if c["id"] == "billing")
+            self.assertEqual(billing["state"], probe.DOWN)
 
 
 class Misdirection(unittest.TestCase):
