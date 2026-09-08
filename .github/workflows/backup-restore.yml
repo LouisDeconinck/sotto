@@ -1,0 +1,223 @@
+name: Backup restore
+
+# A backup nobody has restored is a hope. `backup.sh` validates each archive with
+# `pg_restore --list` before upload, which proves the file is not truncated and nothing more:
+# it cannot tell you the bytes survived the trip, nor that what comes back is a database this
+# code could run on. Those are the questions here, and they can only be answered by doing it.
+#
+# This is the rehearsal of 2026-08-31 turned into a job that repeats itself, because the thing
+# that goes wrong with drills is not that they fail, it is that they stop happening and nobody
+# notices for months.
+#
+# Nothing it prints is data. This repository is public, so these logs are public, and the dump
+# is production: counts, table names and migration versions are safe to say out loud, and
+# nothing else is worth the risk of saying by accident. It restores into a container that is
+# destroyed with the runner, and never onto the host.
+
+on:
+  schedule:
+    # Monthly, on the 4th at 03:29 UTC. The date and the odd minute are both deliberate: away
+    # from the 1st, which is the busiest cron slot there is, and away from the top of the hour,
+    # which is where GitHub's queue is slowest.
+    - cron: "29 3 4 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: backup-restore
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: the newest backup restores
+    if: github.repository == 'getsotto/sotto'
+    runs-on: ubuntu-latest
+    permissions:
+      # Raise an alert nobody has to remember to look for.
+      issues: write
+      # Mint the OIDC token exchanged for short-lived cloud credentials. No long-lived key
+      # exists, and none is created here.
+      id-token: write
+    environment: backup-restore
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sotto
+          POSTGRES_PASSWORD: sotto
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sotto"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check whether restore verification is configured
+        id: config
+        env:
+          DESTINATION: ${{ vars.SOTTO_BACKUP_BUCKET }}
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_RESTORE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          # Skip rather than fail when unconfigured, so merging this cannot turn a healthy
+          # repository red before the one-time cloud setup has been done.
+          if [ -z "$DESTINATION" ] || [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Restore verification is not configured; see deploy/README.md." >&2
+            exit 0
+          fi
+          # backup.sh writes to gs://, s3:// and rclone remotes. This job implements gs:// only,
+          # and the runbook shows the same drill by hand for anything else, so nobody should
+          # read a skip here as their storage being unsupported.
+          case "$DESTINATION" in
+            gs://*)
+              echo "configured=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "configured=false" >> "$GITHUB_OUTPUT"
+              echo "This job restores from gs:// destinations. For ${DESTINATION%%:*}, run the drill in deploy/README.md." >&2
+              ;;
+          esac
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        if: steps.config.outputs.configured == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_RESTORE_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Fetch the newest backup
+        id: fetch
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DESTINATION: ${{ vars.SOTTO_BACKUP_BUCKET }}
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          bucket="${DESTINATION#gs://}"
+          bucket="${bucket%%/*}"
+          case "$bucket" in
+            "" | *[!a-z0-9._-]*)
+              echo "SOTTO_BACKUP_BUCKET does not name a usable bucket: ${DESTINATION}" >&2
+              exit 1
+              ;;
+          esac
+
+          listing="$(curl -fsS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://storage.googleapis.com/storage/v1/b/${bucket}/o?fields=items(name,timeCreated)")"
+          name="$(printf '%s' "$listing" | jq -r '[.items[]?] | max_by(.timeCreated).name // empty')"
+          if [ -z "$name" ]; then
+            echo "reason=The backup bucket is empty, so there is nothing to restore." >> "$GITHUB_OUTPUT"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          encoded="$(printf '%s' "$name" | jq -sRr '@uri')"
+          curl -fsS -H "Authorization: Bearer ${ACCESS_TOKEN}" -o backup.dump \
+            "https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encoded}?alt=media"
+          # Size and name only. Both are already in the runbook's rehearsal records, and
+          # neither says anything about what is inside.
+          echo "restoring ${name} ($(wc -c < backup.dump) bytes)"
+          echo "object=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore into a throwaway database
+        id: restore
+        if: steps.config.outputs.configured == 'true'
+        env:
+          PGPASSWORD: sotto
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+          createdb -h localhost -U sotto restored
+          # --no-owner because the dump's roles do not exist here, and that is not what is
+          # being tested. Errors are counted rather than ignored: pg_restore exits non-zero for
+          # a genuinely broken archive, but it also warns about things that do not matter, and
+          # the difference should be visible rather than swallowed.
+          pg_restore -h localhost -U sotto -d restored --no-owner --no-privileges \
+            backup.dump 2> restore.log || status=$?
+          errors="$(grep -c '^pg_restore: error' restore.log || true)"
+          echo "pg_restore reported ${errors} errors"
+          if [ "${status:-0}" -ne 0 ] || [ "$errors" -ne 0 ]; then
+            # The log can quote SQL from the dump, so it never reaches these public logs.
+            echo "reason=pg_restore failed on ${{ steps.fetch.outputs.object }} with ${errors} errors. The log is withheld because it can quote data; reproduce with the drill in deploy/README.md." >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Check what came back
+        id: check
+        if: steps.config.outputs.configured == 'true'
+        env:
+          PGPASSWORD: sotto
+        run: |
+          set -euo pipefail
+          if ! scripts/check-restore --database-url "postgres://sotto:sotto@localhost:5432/restored"; then
+            echo "reason=The newest backup (${{ steps.fetch.outputs.object }}) restored, but the result did not check out. See the run log for which assertion failed." >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Close a resolved alert
+        if: steps.config.outputs.configured == 'true' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # gh resolves the repository from a git remote. This job does check out the tree, but
+          # naming it explicitly costs nothing and does not depend on that staying true.
+          GH_REPO: ${{ github.repository }}
+          LABEL: restore-alert
+        run: |
+          set -euo pipefail
+          open_alerts="$(gh issue list --state open --label "$LABEL" \
+            --json number --jq '.[].number' 2>/dev/null || true)"
+          for number in $open_alerts; do
+            gh issue close "$number" --comment "A later restore verified cleanly."
+          done
+
+      - name: Send the heartbeat
+        if: steps.config.outputs.configured == 'true' && success()
+        env:
+          HEARTBEAT_URL: ${{ secrets.RESTORE_HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEARTBEAT_URL" ]; then
+            echo "RESTORE_HEARTBEAT_URL is not set; nothing is watching this drill." >&2
+            exit 0
+          fi
+          curl -fsS --retry 3 --max-time 30 "$HEARTBEAT_URL" > /dev/null
+
+      - name: Open or update the alert
+        if: steps.config.outputs.configured == 'true' && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: "The newest backup did not restore"
+          LABEL: restore-alert
+          FETCH_REASON: ${{ steps.fetch.outputs.reason }}
+          RESTORE_REASON: ${{ steps.restore.outputs.reason }}
+          CHECK_REASON: ${{ steps.check.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          reason="${CHECK_REASON:-${RESTORE_REASON:-${FETCH_REASON:-The restore drill failed before reaching a verdict.}}}"
+          # Identified by label rather than title search, which is token based and would adopt
+          # a human issue that happened to mention restoring a backup.
+          gh label create "$LABEL" --force \
+            --color B60205 --description "Raised automatically when a backup does not restore"
+          existing="$(gh issue list --state open --label "$LABEL" \
+            --json number --jq '.[0].number // empty')"
+          body="$(printf '%s\n\nChecked by [this run](%s).' "$reason" "$RUN_URL")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$body"
+          fi
