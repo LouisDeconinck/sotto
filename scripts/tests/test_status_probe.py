@@ -56,7 +56,7 @@ class ApiVerdict(unittest.TestCase):
         outcome = probe.judge_api(response(503, {"content-type": "text/html"}))
         self.assertEqual(outcome.state, probe.DOWN)
         self.assertNotIn("database", outcome.detail)
-        self.assertIn("never reached", outcome.detail)
+        self.assertIn("did not send", outcome.detail)
 
     def test_html_names_the_reverse_proxy_rather_than_the_api(self):
         outcome = probe.judge_api(response(200, {"content-type": "text/html; charset=utf-8"}))
@@ -209,7 +209,18 @@ class SigninVerdict(unittest.TestCase):
         self.assertEqual(probe.judge_signin(r).state, probe.DOWN)
 
     def test_no_oauth_credentials_is_a_choice_not_an_outage(self):
-        self.assertEqual(probe.judge_signin(response(503)).state, probe.UNCONFIGURED)
+        said = response(503, body="oauth is not configured")
+        self.assertEqual(probe.judge_signin(said).state, probe.UNCONFIGURED)
+
+    def test_a_proxy_503_is_downtime_rather_than_a_missing_feature(self):
+        # The expensive mistake, because unconfigured samples are excluded from the tally
+        # rather than counted as bad: a reverse proxy with nothing behind it saying "Service
+        # Unavailable" would delete real downtime from a published figure, not just mislabel
+        # it. Nothing but the application's own words may excuse a 503.
+        proxy = response(503, {"content-type": "text/html"}, "<html>Service Unavailable</html>")
+        outcome = probe.judge_signin(proxy)
+        self.assertEqual(outcome.state, probe.DOWN)
+        self.assertIn("did not send", outcome.detail)
 
     def test_a_200_means_the_redirect_never_happened(self):
         self.assertEqual(probe.judge_signin(response(200)).state, probe.DOWN)
@@ -226,7 +237,14 @@ class BillingVerdict(unittest.TestCase):
         self.assertEqual(probe.judge_billing(response(200)).state, probe.DOWN)
 
     def test_no_billing_configured_is_a_choice_not_an_outage(self):
-        self.assertEqual(probe.judge_billing(response(503)).state, probe.UNCONFIGURED)
+        said = response(503, body="billing is not configured")
+        self.assertEqual(probe.judge_billing(said).state, probe.UNCONFIGURED)
+
+    def test_a_proxy_503_is_downtime_rather_than_a_missing_feature(self):
+        proxy = response(503, {"content-type": "text/html"}, "<html>Service Unavailable</html>")
+        outcome = probe.judge_billing(proxy)
+        self.assertEqual(outcome.state, probe.DOWN)
+        self.assertIn("did not send", outcome.detail)
 
 
 class Observation(unittest.TestCase):
@@ -263,6 +281,29 @@ class Observation(unittest.TestCase):
         with unittest.mock.patch.object(probe, "fetch", return_value=response(200)):
             with self.assertRaises(AttributeError):
                 probe.observe("https://example.invalid", [self.probe_for(broken)])
+
+
+class ExcusedSamples(unittest.TestCase):
+    """Every route by which a sample can be dropped from the tally, in one place, because a
+    dropped sample is invisible in the published figure in a way a wrong one is not."""
+
+    def test_only_the_application_can_excuse_a_503(self):
+        proxy = response(503, {"content-type": "text/html"}, "<html>Service Unavailable</html>")
+        for judge in (probe.judge_api, probe.judge_signin, probe.judge_billing):
+            with self.subTest(judge=judge.__name__):
+                self.assertEqual(judge(proxy).state, probe.DOWN)
+
+    def test_the_application_says_it_in_words_the_probe_reads(self):
+        # The server renders NotConfigured as the plain text body of a 503, so these are the
+        # exact strings a deployment without oauth or billing returns.
+        self.assertEqual(
+            probe.judge_signin(response(503, body="oauth is not configured")).state,
+            probe.UNCONFIGURED,
+        )
+        self.assertEqual(
+            probe.judge_billing(response(503, body="billing is not configured")).state,
+            probe.UNCONFIGURED,
+        )
 
 
 class Summary(unittest.TestCase):

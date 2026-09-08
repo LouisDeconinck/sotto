@@ -45,6 +45,16 @@ TIMEOUT_SECONDS = 15
 # either silently excused or wrongly failed depending on which probe saw it.
 REDIRECTS = (301, 302, 303, 307, 308)
 
+# What the server says when a feature is switched off, as opposed to broken: `NotConfigured`
+# renders its message as the plain-text body of a 503, so "oauth is not configured" and
+# "billing is not configured" both carry this. A 503 without it did not come from the
+# application.
+NOT_CONFIGURED_BODY = "not configured"
+
+# One phrasing for the same observation wherever it is made: a 503 whose body is not the one
+# the endpoint itself sends. Something in front of the application answered.
+FOREIGN_503 = "503 that the application did not send, so something in front of it answered"
+
 OK = "ok"
 DOWN = "down"
 UNCONFIGURED = "unconfigured"
@@ -83,6 +93,17 @@ class Probe:
 
 def header(response: Response, name: str) -> str:
     return response.headers.get(name.lower(), "")
+
+
+def says_unconfigured(response: Response) -> bool:
+    """Whether a 503 is the application declining to run a feature, in its own words.
+
+    The distinction decides whether a sample counts at all, which makes it the most expensive
+    thing to get wrong here. Unconfigured samples are excluded from the tally on purpose, so
+    treating any 503 as one means a reverse proxy with nothing behind it quietly deletes real
+    downtime from a published figure rather than merely mislabelling it.
+    """
+    return NOT_CONFIGURED_BODY in response.body_prefix.lower()
 
 
 def media_type(response: Response) -> str:
@@ -142,7 +163,7 @@ def judge_api(response: Response) -> Outcome:
         # whoever reads this record to the wrong machine.
         if response.body_prefix.strip() == "unavailable":
             return Outcome(DOWN, "readiness reported the database unreachable")
-        return Outcome(DOWN, "503 from the deployment, which never reached the readiness check")
+        return Outcome(DOWN, FOREIGN_503)
     if (astray := misdirected(response)) is not None:
         return astray
     if media_type(response) == "text/html":
@@ -166,6 +187,8 @@ def judge_signin(response: Response) -> Outcome:
     if response.status in REDIRECTS and started:
         return Outcome(OK)
     if response.status == 503:
+        if not says_unconfigured(response):
+            return Outcome(DOWN, FOREIGN_503)
         return Outcome(UNCONFIGURED, "this deployment has no oauth credentials")
     # Checked after the healthy answer, not before it, because this is the one probe whose
     # healthy answer is itself a redirect. Reaching here means a redirect that is not the
@@ -183,6 +206,8 @@ def judge_billing(response: Response) -> Outcome:
     if response.status == 401:
         return Outcome(OK)
     if response.status == 503:
+        if not says_unconfigured(response):
+            return Outcome(DOWN, FOREIGN_503)
         return Outcome(UNCONFIGURED, "this deployment has no billing configured")
     return Outcome(DOWN, f"expected 401 for an unsigned webhook, got {response.status}")
 
