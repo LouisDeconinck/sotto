@@ -353,6 +353,15 @@ somewhere else before they age out is the whole of what that takes.
 
 Set the repository variable `SOTTO_PUBLIC_URL` to the deployment to watch. Without it the job
 skips rather than probing a default, so a fork cannot point it at somebody else's deployment.
+
+**In a fork, one line has to change as well.** The job carries
+`if: github.repository == 'getsotto/sotto'`, so a fork of this repository collects nothing and
+does so silently, which is a poor way to find out. That guard exists because a fork inherits
+both the schedule and the write permission, and neither probing another project's deployment
+nor pushing history into its own branch is something a fork should start doing by being made.
+Change the name to your own repository, or drop the line if you are happy for every fork of
+your fork to sample too. The alternative is to skip the workflow entirely and run the script
+from your own scheduler, below.
 Set the secret `STATUS_HEARTBEAT_URL` too, from any external checker: the collector pings it
 after each round of samples is pushed, and the checker alerting when those pings stop is the
 only thing that can notice this job dying or running green while sampling nothing. Allow that
