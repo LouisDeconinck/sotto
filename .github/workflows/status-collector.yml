@@ -20,8 +20,7 @@ on:
     - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   # Two collectors appending to the same branch would race on the push. Queue instead of
@@ -37,6 +36,12 @@ jobs:
     # pushing history or probing someone else's deployment.
     if: github.repository == 'getsotto/sotto'
     runs-on: ubuntu-latest
+    permissions:
+      # Push the samples onto the history branch. Granted on the job rather than the workflow
+      # so that anything added here later has to ask for it deliberately: this is a token that
+      # can write to any branch in the repository, including main, and the only thing it is
+      # wanted for is appending data to one orphan branch.
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
