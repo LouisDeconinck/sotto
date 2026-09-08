@@ -3,7 +3,7 @@
 The verdicts are the part worth pinning down. Each one decides whether a public answer
 means the component works, and several of the wrong readings are worse than a missed
 outage: an unsigned webhook that succeeds is a security failure reported as green, and the
-single page app answering for the API is the exact shape of a misconfigured deployment
+single-page app answering for the API is the exact shape of a misconfigured deployment
 that looks healthy from outside.
 """
 

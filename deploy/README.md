@@ -363,7 +363,7 @@ record that is meant to be permanent:
   redirect is recorded with a detail saying so rather than a bare failure, but the tally still
   counts it.
 - **Wait until the deployment serves `/health/ready`**, which means version 0.7.0 or later.
-  Before that the path falls through to the single page app, and the API row records real
+  Before that the path falls through to the single-page app, and the API row records real
   downtime for a deployment that is working.
 
 Every probe is unauthenticated and asks only what a visitor could ask:

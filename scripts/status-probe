@@ -95,7 +95,7 @@ def misdirected(response: Response) -> Outcome | None:
     Nothing here follows redirects, so a base URL that is not the origin the deployment serves
     reads as a permanent outage across every row at once. The bundled Caddyfile folds `www`
     onto the apex and Caddy sends `http` to `https`, so a variable set to either of those does
-    exactly that. Left as a bare "expected 200", it is a mystery; named, it is a two minute fix.
+    exactly that. Left as a bare "expected 200", it is a mystery; named, it is a two-minute fix.
 
     Still recorded as down rather than excused, because a deployment that really has started
     redirecting its own API is having an outage, and a status page that quietly stopped
@@ -140,7 +140,7 @@ def judge_api(response: Response) -> Outcome:
     if (astray := misdirected(response)) is not None:
         return astray
     if media_type(response) == "text/html":
-        # The single page app answered instead of the server, which means the deployment's
+        # The single-page app answered instead of the server, which means the deployment's
         # reverse proxy has no route for this path rather than that the API is down.
         return Outcome(DOWN, "the web app answered instead of the API")
     return Outcome(DOWN, f"expected 200 ok, got {response.status}")
