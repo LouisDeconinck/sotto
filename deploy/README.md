@@ -331,6 +331,59 @@ rather than refuses is reported as unavailable rather than holding the request o
 apart from "the box is up and the database is not". Keep it pointed at `/health` for that
 distinction to mean anything.
 
+## Status history
+
+A status page needs history, and history cannot be backfilled: every day nothing samples the
+deployment is a permanent gap in the record. So the collector starts before the page exists.
+
+`.github/workflows/status-collector.yml` samples the public surface roughly every ten minutes
+and appends what it saw to an orphan `status-history` branch, which shares no history with
+`main` and so never appears in a source diff. Two files accumulate there:
+
+- `summary.json`, the current state of each component and a per-day tally over ninety days,
+  which is what a page renders;
+- `samples/<date>.jsonl`, one line per observation, so the tallies can be recomputed if the
+  aggregation ever turns out to be wrong. A published uptime figure nobody can recheck is a
+  figure nobody should have to take on trust.
+
+Set the repository variable `SOTTO_PUBLIC_URL` to the deployment to watch. Without it the job
+skips rather than probing a default, so a fork cannot point it at somebody else's instance.
+
+Every probe is unauthenticated and asks only what a visitor could ask:
+
+| Component   | Probe                                          | Healthy answer                   |
+| ----------- | ---------------------------------------------- | -------------------------------- |
+| API         | `GET /health/ready`                            | `200` with the body `ok`         |
+| Web app     | `GET /`                                        | `200` and an HTML content type   |
+| Sign in     | `GET /auth/github/login` with a loopback callback | a redirect to `github.com`    |
+| Billing     | `POST /billing/webhook` with no signature      | `401`                            |
+| Secret sync | not yet probed                                 | -                                |
+
+Two of those distinguish "not configured" from "broken", because they are not the same thing
+and only one of them belongs in an uptime figure. A `503` from sign-in or billing means the
+deployment has no OAuth or no Stripe credentials, which is a choice; it is recorded as
+unconfigured and left out of the tally, so a self-hoster running neither does not watch their
+published uptime fall for features they decided not to run. A `503` from `/health/ready` is
+the opposite: it has exactly one cause, an unreachable database, and it counts as downtime.
+
+The billing probe deliberately sends an unsigned payload and requires a `401`. A `200` there
+would mean signature verification is not happening, so that case is recorded as down rather
+than as a passing request.
+
+Secret sync is listed but not measured. It needs a throwaway organisation holding junk secrets
+and a machine token to read them, and neither exists yet; shipping a probe that has never run
+would repeat the mistake this whole effort was built to catch. It appears as a row so a page
+can say plainly that it is not being watched, rather than implying by omission that everything
+is covered.
+
+The job records and never alerts. A component being down leaves the workflow green, because
+paging belongs to an external monitor that survives this repository being unreachable, and a
+workflow that went red on every blip would train everyone to ignore the failure that matters
+here, which is the collector itself dying.
+
+Run `scripts/status-probe --base-url <url> --data-dir <dir>` to sample by hand. Its verdict
+logic is covered by `scripts/tests/test_status_probe.py`.
+
 ## Organisation-deletion metrics
 
 The deletion worker stores aggregate lifecycle counters in Postgres. Their fixed vocabulary, alert
