@@ -39,12 +39,21 @@ class ApiVerdict(unittest.TestCase):
         self.assertEqual(probe.judge_api(response(200, body="")).state, probe.DOWN)
 
     def test_a_readiness_503_is_an_outage_not_a_missing_feature(self):
-        # The endpoint returns 503 for exactly one reason: it could not reach the database.
-        # Excusing that as "unconfigured" would drop it out of the uptime tally entirely,
-        # so the one failure the probe exists to see would be the one it never counted.
-        outcome = probe.judge_api(response(503))
+        # The endpoint returns `unavailable` for exactly one reason: it could not reach the
+        # database. Excusing that as "unconfigured" would drop it out of the uptime tally
+        # entirely, so the one failure the probe exists to see would be the one never counted.
+        outcome = probe.judge_api(response(503, body="unavailable"))
         self.assertEqual(outcome.state, probe.DOWN)
         self.assertIn("database", outcome.detail)
+
+    def test_a_proxy_503_is_not_blamed_on_the_database(self):
+        # A reverse proxy with no server behind it answers 503 without the API being involved
+        # at all. Same verdict, different machine to go and look at, and a record that named
+        # the database would send somebody to the wrong one.
+        outcome = probe.judge_api(response(503, {"content-type": "text/html"}))
+        self.assertEqual(outcome.state, probe.DOWN)
+        self.assertNotIn("database", outcome.detail)
+        self.assertIn("never reached", outcome.detail)
 
     def test_html_names_the_reverse_proxy_rather_than_the_api(self):
         outcome = probe.judge_api(response(200, {"content-type": "text/html; charset=utf-8"}))
@@ -111,7 +120,7 @@ class Misdirection(unittest.TestCase):
 
     def test_a_readiness_503_still_wins_over_the_redirect_check(self):
         # Ordering matters: a database outage must not be relabelled as a URL problem.
-        outcome = probe.judge_api(response(503))
+        outcome = probe.judge_api(response(503, body="unavailable"))
         self.assertIn("database", outcome.detail)
 
 

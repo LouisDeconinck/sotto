@@ -120,9 +120,14 @@ def judge_api(response: Response) -> Outcome:
     if response.status == 200 and response.body_prefix.strip() == "ok":
         return Outcome(OK)
     if response.status == 503:
-        # The readiness probe's own way of saying the database is unreachable. That is an
-        # outage, not a missing configuration, so it must not be excused as one.
-        return Outcome(DOWN, "readiness reported the database unreachable")
+        # Two different 503s reach this line and they mean different things. The readiness
+        # endpoint answers `unavailable` when it cannot reach Postgres. A reverse proxy with
+        # no server behind it answers 503 too, having never spoken to the API at all. Both are
+        # outages, so the verdict is the same either way, but naming the wrong one sends
+        # whoever reads this record to the wrong machine.
+        if response.body_prefix.strip() == "unavailable":
+            return Outcome(DOWN, "readiness reported the database unreachable")
+        return Outcome(DOWN, "503 from the deployment, which never reached the readiness check")
     if (astray := misdirected(response)) is not None:
         return astray
     if media_type(response) == "text/html":
