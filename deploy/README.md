@@ -461,13 +461,20 @@ gcloud iam service-accounts add-iam-policy-binding \
   --member "principalSet://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
 
 # And to upload the source it submits. `roles/cloudbuild.builds.editor` carries eleven
-# permissions and not one of them is storage, so without this the submit fails on the staging
-# bucket rather than on anything to do with backups. objectAdmin rather than objectCreator
-# because a creator that cannot list cannot upload either, which is the same trap the backup
-# writer hit.
+# permissions and not one of them is storage, so without these the submit fails on the staging
+# bucket rather than on anything to do with backups.
+#
+# Both roles, because neither is enough alone: objectAdmin has no `buckets.*` permission at all
+# and the client looks the bucket up before writing to it. The failure blames
+# `serviceusage.services.use` and suggests Service Usage Admin, which is a much larger grant
+# than the missing one and would not be the reason it worked.
 gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
   --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
   --role roles/storage.objectAdmin
+
+gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.legacyBucketReader
 ```
 
 Then set the repository variables `GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT` and
