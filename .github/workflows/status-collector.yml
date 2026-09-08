@@ -144,6 +144,11 @@ jobs:
           HEARTBEAT_URL: ${{ secrets.STATUS_HEARTBEAT_URL }}
         run: |
           set -euo pipefail
-          if [ -n "$HEARTBEAT_URL" ]; then
-            curl -fsS --retry 3 --max-time 30 "$HEARTBEAT_URL" > /dev/null
+          if [ -z "$HEARTBEAT_URL" ]; then
+            # Not a failure: this ships before any monitoring account exists, and a self-hoster
+            # may never want one. But it is worth saying out loud rather than passing quietly,
+            # because until it is set nothing at all would notice this job going away.
+            echo "STATUS_HEARTBEAT_URL is not set; nothing is watching this collector." >&2
+            exit 0
           fi
+          curl -fsS --retry 3 --max-time 30 "$HEARTBEAT_URL" > /dev/null
