@@ -1,0 +1,154 @@
+name: Status collector
+
+# Samples the public surface of the hosted instance and appends what it saw to a data branch.
+# A status page renders that history later; this job only gathers it, which is why it starts
+# now rather than alongside the page. History cannot be backfilled, so every day this does not
+# run is a permanent gap in the record.
+#
+# It alerts on nothing. A component being down is recorded and the job still succeeds, because
+# paging belongs to the external monitor that survives this repository being unreachable, and a
+# workflow that went red on every blip would teach everyone to ignore the one failure that
+# matters here: the collector itself dying.
+
+on:
+  schedule:
+    # Roughly every ten minutes, and roughly is the honest word. GitHub queues scheduled
+    # workflows rather than guaranteeing them: this repository has seen a daily job arrive
+    # nearly six hours late. So every sample carries its own timestamp and the tallies count
+    # observations rather than assuming a cadence, and any page built on this must describe
+    # what it measured rather than promising an interval.
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Two collectors appending to the same branch would race on the push, so runs queue rather
+  # than overlap. Not cancelling the one in progress means the sample it is part way through
+  # still lands.
+  #
+  # This is a narrower guarantee than it looks, and worth stating rather than assuming: GitHub
+  # holds only one pending run per group, so if a third arrives while one is running and one
+  # is waiting, the waiting one is cancelled and its sample is lost. That needs a real backlog
+  # at this interval, and a gap in the record is a gap, not a wrong number, but nothing here
+  # makes it impossible.
+  group: status-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: sample the public surface
+    # Only the canonical repository watches the hosted instance. A fork has no business
+    # pushing history or probing someone else's deployment.
+    if: github.repository == 'getsotto/sotto'
+    runs-on: ubuntu-latest
+    permissions:
+      # Push the samples onto the history branch. Granted on the job rather than the workflow
+      # so that anything added here later has to ask for it deliberately: this is a token that
+      # can write to any branch in the repository, including main, and the only thing it is
+      # wanted for is appending data to one orphan branch.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check out the history branch
+        env:
+          BRANCH: status-history
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The branch is orphaned on purpose: it shares no history with main, so a data
+          # commit every few minutes never appears in the source history or in a diff.
+          if git fetch --depth 1 origin "$BRANCH" 2>/dev/null; then
+            git worktree add history FETCH_HEAD
+            git -C history checkout -B "$BRANCH"
+          else
+            git worktree add --detach history
+            git -C history checkout --orphan "$BRANCH"
+            git -C history rm -rq --cached . || true
+            find history -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+
+      - name: Sample
+        id: sample
+        env:
+          # The deployment to watch. Absent, the job skips rather than probing a default,
+          # so a fork or a self-hoster cannot accidentally point this at someone else.
+          BASE_URL: ${{ vars.SOTTO_PUBLIC_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_URL" ]; then
+            echo "sampled=false" >> "$GITHUB_OUTPUT"
+            echo "SOTTO_PUBLIC_URL is not set; nothing to sample. See deploy/README.md." >&2
+            exit 0
+          fi
+          scripts/status-probe --base-url "$BASE_URL" --data-dir history
+          echo "sampled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the samples
+        id: commit
+        if: steps.sample.outputs.sampled == 'true'
+        env:
+          BRANCH: status-history
+        run: |
+          set -euo pipefail
+          cd history
+          if [ -z "$(git status --porcelain)" ]; then
+            # Not expected: the probe rewrites the summary every round, so a clean tree means
+            # it wrote nothing. Say so and leave `pushed` unset, which withholds the heartbeat
+            # below rather than confirming a round that never landed.
+            echo "the probe left nothing to commit" >&2
+            exit 0
+          fi
+          git add -A
+          git commit -q -m "status: $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Another run may have landed between the fetch and now. Rebase onto it and try
+          # again, which recovers the cases worth recovering: a transient push failure, or a
+          # run that wrote a different day's file. Two runs that genuinely overlap both
+          # rewrite this summary, so the rebase stops and this job fails, which is the
+          # intended outcome. Forcing would make the push succeed by discarding the other
+          # run's samples, and a history with silent holes is worse than a job that went red.
+          # The concurrency group above is what actually keeps runs from overlapping; this is
+          # what happens if it ever fails to.
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$BRANCH"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git fetch origin "$BRANCH"
+            git rebase FETCH_HEAD || { git rebase --abort; exit 1; }
+          done
+          echo "could not push the samples after three attempts" >&2
+          exit 1
+
+      - name: Send the heartbeat
+        # Last, and gated on the push having actually happened rather than merely on the step
+        # before it having run. Sending it earlier would confirm a round that never landed,
+        # which is the shape of every heartbeat that quietly stops meaning anything.
+        #
+        # Whichever external checker owns this URL alerts when the pings stop, which is the
+        # only thing that can notice this job dying, being disabled, or running green for
+        # weeks against an unset variable while sampling nothing at all. An alarm cannot
+        # report its own silence; something outside it has to miss the noise.
+        #
+        # Its grace period has to allow for GitHub's queue rather than the cron: scheduled
+        # runs here have arrived hours late, and a heartbeat monitor tuned to the interval
+        # would page for lateness rather than for failure.
+        if: steps.commit.outputs.pushed == 'true'
+        env:
+          HEARTBEAT_URL: ${{ secrets.STATUS_HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEARTBEAT_URL" ]; then
+            # Not a failure: this ships before any monitoring account exists, and a self-hoster
+            # may never want one. But it is worth saying out loud rather than passing quietly,
+            # because until it is set nothing at all would notice this job going away.
+            echo "STATUS_HEARTBEAT_URL is not set; nothing is watching this collector." >&2
+            exit 0
+          fi
+          curl -fsS --retry 3 --max-time 30 "$HEARTBEAT_URL" > /dev/null

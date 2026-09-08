@@ -331,6 +331,118 @@ rather than refuses is reported as unavailable rather than holding the request o
 apart from "the box is up and the database is not". Keep it pointed at `/health` for that
 distinction to mean anything.
 
+## Status history
+
+A status page needs history, and history cannot be backfilled: every day nothing samples the
+deployment is a permanent gap in the record. So the collector starts before the page exists.
+
+`.github/workflows/status-collector.yml` samples the public surface roughly every ten minutes
+and appends what it saw to an orphan `status-history` branch, which shares no history with
+`main` and so never appears in a source diff. Two files accumulate there:
+
+- `summary.json`, the current state of each component and a per-day tally over ninety days,
+  which is what a page renders;
+- `samples/<date>.jsonl`, one line per observation, so the tallies can be recomputed if the
+  aggregation ever turns out to be wrong. A published uptime figure nobody can recheck is a
+  figure nobody should have to take on trust.
+
+Both age out at the same ninety days, which is the point: the audit trail covers exactly the
+window the summary publishes, and nothing is kept that no longer backs a number anyone can see.
+If you want a longer record than you publish, the sample files are plain JSONL and copying them
+somewhere else before they age out is the whole of what that takes.
+
+Set the repository variable `SOTTO_PUBLIC_URL` to the deployment to watch. Without it the job
+skips rather than probing a default, so a fork cannot point it at somebody else's deployment.
+
+**In a fork, one line has to change as well.** The job carries
+`if: github.repository == 'getsotto/sotto'`, so a fork of this repository collects nothing and
+does so silently, which is a poor way to find out. That guard exists because a fork inherits
+both the schedule and the write permission, and neither probing another project's deployment
+nor pushing history into its own branch is something a fork should start doing by being made.
+Change the name to your own repository, or drop the line if you are happy for every fork of
+your fork to sample too. The alternative is to skip the workflow entirely and run the script
+from your own scheduler, below.
+Set the secret `STATUS_HEARTBEAT_URL` too, from any external checker: the collector pings it
+after each round of samples is pushed, and the checker alerting when those pings stop is the
+only thing that can notice this job dying or running green while sampling nothing. Allow that
+monitor a generous grace period, hours rather than minutes, because GitHub queues scheduled
+workflows rather than guaranteeing them and a run arriving late is not a run that failed.
+
+Two things to get right before setting the variable, because both write a wrong answer into a
+record that is meant to be permanent:
+
+- **Point it at the origin the deployment actually serves**, with the scheme it serves on. No
+  probe follows redirects, so a `www` host or an `http` URL that the deployment folds onto its
+  canonical origin would otherwise read as every component being down at once. A round where
+  every probe was redirected is treated as a wrong setting rather than an outage: nothing is
+  written and the run fails, which withholds the heartbeat and makes the mistake noticeable
+  instead of accruing invented downtime. A deployment that is genuinely gone refuses
+  connections rather than redirecting them, so a real outage is still recorded. A single
+  redirected component among working ones is recorded too, since only unanimity is
+  unambiguous.
+- **Wait until the deployment serves `/health/ready`**, which means version 0.7.0 or later.
+  Before that the path falls through to the single-page app, and the API row records real
+  downtime for a deployment that is working.
+
+Every probe is unauthenticated and asks only what a visitor could ask:
+
+| Component   | Probe                                          | Healthy answer                   |
+| ----------- | ---------------------------------------------- | -------------------------------- |
+| API         | `GET /health/ready`                            | `200` with the body `ok`         |
+| Web app     | `GET /`                                        | `200` and an HTML content type   |
+| Sign in     | `GET /auth/github/login` with a loopback callback | a redirect to `github.com`    |
+| Billing     | `POST /billing/webhook` with no signature      | `401`                            |
+| Secret sync | not yet probed                                 | -                                |
+
+Two of those distinguish "not configured" from "broken", because they are not the same thing
+and only one of them belongs in an uptime figure. A `503` from sign-in or billing means the
+deployment has no OAuth or no Stripe credentials, which is a choice; it is recorded as
+unconfigured and left out of the tally, so a self-hoster running neither does not watch their
+published uptime fall for features they decided not to run. A `503` from `/health/ready` is
+the opposite: it has exactly one cause, an unreachable database, and it counts as downtime.
+
+The billing probe deliberately sends an unsigned payload and requires a `401`. A `200` there
+would mean signature verification is not happening, so that case is recorded as down rather
+than as a passing request.
+
+Secret sync is listed but not measured. It needs a throwaway organisation holding junk secrets
+and a machine token to read them, and neither exists yet; shipping a probe that has never run
+would repeat the mistake this whole effort was built to catch. It appears as a row so a page
+can say plainly that it is not being watched, rather than implying by omission that everything
+is covered.
+
+The job records and never alerts. A component being down leaves the workflow green, because
+paging belongs to an external monitor that survives this repository being unreachable, and a
+workflow that went red on every blip would train everyone to ignore the failure that matters
+here, which is the collector itself dying.
+
+The sign-in probe is the one that writes: starting the OAuth flow records a short-lived login
+row, which the same endpoint clears on its next call. That is deliberate, since it exercises
+the write path rather than only a read, but it is worth knowing that this probe is not purely
+an observer.
+
+### Running it somewhere other than GitHub Actions
+
+Nothing about the check needs GitHub. `scripts/status-probe --base-url <url> --data-dir <dir>`
+is Python 3 with no dependencies beyond the standard library, and the data directory is a
+directory of files. Run it from cron, a systemd timer, or any other scheduler:
+
+```sh
+*/10 * * * * /path/to/scripts/status-probe --base-url https://example.com --data-dir /var/lib/sotto-status
+```
+
+Serve or sync that directory however suits you: a static host, an object store, a commit to
+any git host. The workflow adds three things and no more, so anything that does them is
+equivalent: it runs the script on a schedule, keeps the output somewhere durable, and pings a
+heartbeat afterwards so the check being dead is noticeable.
+
+The verdict logic is covered by `scripts/tests/test_status_probe.py`.
+
+One caveat if you keep the history in git, as the bundled workflow does: the samples age out
+with the summary, but the commits do not. At this interval that is roughly fifty thousand
+commits a year on a branch nothing else reads. Deleting the branch is a safe reset if it ever
+becomes awkward, since the next run recreates it, at the cost of the history it held.
+
 ## Organisation-deletion metrics
 
 The deletion worker stores aggregate lifecycle counters in Postgres. Their fixed vocabulary, alert
