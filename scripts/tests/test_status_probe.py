@@ -50,11 +50,24 @@ class ApiVerdict(unittest.TestCase):
         self.assertEqual(outcome.state, probe.DOWN)
         self.assertIn("web app answered", outcome.detail)
 
+    def test_the_diagnostic_survives_an_unusually_cased_media_type(self):
+        outcome = probe.judge_api(response(200, {"content-type": "TEXT/HTML"}))
+        self.assertIn("web app answered", outcome.detail)
+
 
 class WebVerdict(unittest.TestCase):
     def test_html_is_the_whole_requirement(self):
         ok = response(200, {"content-type": "text/html; charset=utf-8"})
         self.assertEqual(probe.judge_web(ok).state, probe.OK)
+
+    def test_the_media_type_is_matched_the_way_http_defines_it(self):
+        # Case insensitive, and the whole token rather than a prefix. A prefix match would
+        # call a legal Text/HTML response an outage and a text/html-extra one healthy, both
+        # of which put the wrong cause in a record people are meant to trust.
+        upper = response(200, {"content-type": "Text/HTML; charset=UTF-8"})
+        self.assertEqual(probe.judge_web(upper).state, probe.OK)
+        lookalike = response(200, {"content-type": "text/html-extra"})
+        self.assertEqual(probe.judge_web(lookalike).state, probe.DOWN)
 
     def test_a_200_that_is_not_a_page_is_not_the_app(self):
         self.assertEqual(probe.judge_web(response(200, {"content-type": "text/plain"})).state, probe.DOWN)

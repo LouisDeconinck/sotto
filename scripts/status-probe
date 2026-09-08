@@ -72,6 +72,16 @@ def header(response: Response, name: str) -> str:
     return response.headers.get(name.lower(), "")
 
 
+def media_type(response: Response) -> str:
+    """The bare media type, lowercased, with any parameters dropped.
+
+    Media types are case insensitive and usually arrive with a charset attached, so a prefix
+    match on the raw header both misses a legal `Text/HTML` and accepts a `text/html-extra`
+    that is not HTML at all. Either reading would put the wrong cause in the record.
+    """
+    return header(response, "content-type").split(";")[0].strip().lower()
+
+
 def judge_api(response: Response) -> Outcome:
     if response.status == 200 and response.body_prefix.strip() == "ok":
         return Outcome(OK)
@@ -79,7 +89,7 @@ def judge_api(response: Response) -> Outcome:
         # The readiness probe's own way of saying the database is unreachable. That is an
         # outage, not a missing configuration, so it must not be excused as one.
         return Outcome(DOWN, "readiness reported the database unreachable")
-    if header(response, "content-type").startswith("text/html"):
+    if media_type(response) == "text/html":
         # The single page app answered instead of the server, which means the deployment's
         # reverse proxy has no route for this path rather than that the API is down.
         return Outcome(DOWN, "the web app answered instead of the API")
@@ -87,7 +97,7 @@ def judge_api(response: Response) -> Outcome:
 
 
 def judge_web(response: Response) -> Outcome:
-    if response.status == 200 and header(response, "content-type").startswith("text/html"):
+    if response.status == 200 and media_type(response) == "text/html":
         return Outcome(OK)
     return Outcome(DOWN, f"expected an html page, got {response.status}")
 
