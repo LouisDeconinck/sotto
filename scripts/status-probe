@@ -83,6 +83,24 @@ def media_type(response: Response) -> str:
     return header(response, "content-type").split(";")[0].strip().lower()
 
 
+def misdirected(response: Response) -> Outcome | None:
+    """A redirect where the probe did not ask for one, named as what it almost always is.
+
+    Nothing here follows redirects, so a base URL that is not the origin the deployment serves
+    reads as a permanent outage across every row at once. The bundled Caddyfile folds `www`
+    onto the apex and Caddy sends `http` to `https`, so a variable set to either of those does
+    exactly that. Left as a bare "expected 200", it is a mystery; named, it is a two minute fix.
+
+    Still recorded as down rather than excused, because a deployment that really has started
+    redirecting its own API is having an outage, and a status page that quietly stopped
+    counting it would be worse than one that made someone check a URL.
+    """
+    if response.status in (301, 302, 307, 308):
+        target = header(response, "location")[:120]
+        return Outcome(DOWN, f"redirected to {target}; the base url must be the origin served")
+    return None
+
+
 def judge_api(response: Response) -> Outcome:
     if response.status == 200 and response.body_prefix.strip() == "ok":
         return Outcome(OK)
@@ -90,6 +108,8 @@ def judge_api(response: Response) -> Outcome:
         # The readiness probe's own way of saying the database is unreachable. That is an
         # outage, not a missing configuration, so it must not be excused as one.
         return Outcome(DOWN, "readiness reported the database unreachable")
+    if (astray := misdirected(response)) is not None:
+        return astray
     if media_type(response) == "text/html":
         # The single page app answered instead of the server, which means the deployment's
         # reverse proxy has no route for this path rather than that the API is down.
@@ -98,6 +118,8 @@ def judge_api(response: Response) -> Outcome:
 
 
 def judge_web(response: Response) -> Outcome:
+    if (astray := misdirected(response)) is not None:
+        return astray
     if response.status == 200 and media_type(response) == "text/html":
         return Outcome(OK)
     return Outcome(DOWN, f"expected an html page, got {response.status}")
@@ -113,6 +135,8 @@ def judge_signin(response: Response) -> Outcome:
 
 
 def judge_billing(response: Response) -> Outcome:
+    if (astray := misdirected(response)) is not None:
+        return astray
     if response.status == 401:
         return Outcome(OK)
     if response.status == 503:

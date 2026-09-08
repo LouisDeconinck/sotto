@@ -75,6 +75,32 @@ class WebVerdict(unittest.TestCase):
         self.assertEqual(probe.judge_web(response(502)).state, probe.DOWN)
 
 
+class Misdirection(unittest.TestCase):
+    """A base URL that is not the origin the deployment serves takes every row down at once,
+    which is a configuration mistake wearing the costume of a total outage."""
+
+    def redirect(self, to="https://getsotto.co.uk/"):
+        return response(301, {"location": to})
+
+    def test_every_probe_that_expects_no_redirect_names_one(self):
+        for judge in (probe.judge_api, probe.judge_web, probe.judge_billing):
+            with self.subTest(judge=judge.__name__):
+                outcome = judge(self.redirect())
+                self.assertEqual(outcome.state, probe.DOWN)
+                self.assertIn("redirected to https://getsotto.co.uk/", outcome.detail)
+                self.assertIn("base url", outcome.detail)
+
+    def test_sign_in_is_not_caught_by_it(self):
+        # The one probe whose healthy answer is a redirect must keep passing.
+        r = response(303, {"location": "https://github.com/login/oauth/authorize?client_id=x"})
+        self.assertEqual(probe.judge_signin(r).state, probe.OK)
+
+    def test_a_readiness_503_still_wins_over_the_redirect_check(self):
+        # Ordering matters: a database outage must not be relabelled as a URL problem.
+        outcome = probe.judge_api(response(503))
+        self.assertIn("database", outcome.detail)
+
+
 class SigninVerdict(unittest.TestCase):
     def test_a_redirect_to_github_is_the_flow_starting(self):
         r = response(303, {"location": "https://github.com/login/oauth/authorize?client_id=x"})
