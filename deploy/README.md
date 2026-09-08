@@ -338,8 +338,8 @@ A backup nobody has restored is a hope. `backup.sh` validates each archive with
 cannot tell you the bytes survived the trip to the bucket, and it cannot tell you that what
 comes back is a database this code could run on. Only restoring one answers those.
 
-`.github/workflows/backup-restore.yml` does it monthly: fetch the newest object, restore it into
-a throwaway Postgres that dies with the runner, and check what came back. Never onto the host,
+`deploy/restore-verification.yaml` does it monthly: fetch the newest object, restore it into a
+throwaway Postgres that dies with the build, and check what came back. Never onto the host,
 which by design cannot read what it wrote.
 
 What it asserts, which is the rehearsal of 2026-08-31 written down:
@@ -355,16 +355,30 @@ What it asserts, which is the rehearsal of 2026-08-31 written down:
 - the tables that must never be empty are not. A dump of the wrong database, or one taken after
   a truncation, passes every structural check ever written and fails this one.
 
-Nothing the job prints is data. This repository is public, so its workflow logs are public, and
-the dump is production. Counts, table names and migration versions are safe to say out loud;
-`pg_restore`'s error log is withheld even on failure, because it can quote the SQL it choked on.
+Nothing the job prints is data. Counts, table names and migration versions are safe to say out
+loud; `pg_restore`'s error log stays in the build workspace even on failure, because it can quote
+the SQL it choked on. The build logs are private to the project, and this is careful anyway: a
+log that only holds what it should is one you can paste into an issue without reading it twice.
+
+### Where it runs, and why not with the other checks
+
+Every other check here is a GitHub Actions workflow. This one is not, and the reason is what a
+dump contains. Secret names and values are ciphertext, so a backup gives up nothing about them.
+The metadata is plain text: user emails, OAuth identities, the grant graph, timestamps. Running
+the drill inside the project that already holds the bucket means none of that is copied to
+another party to prove a point about it, and the same-region read costs nothing.
+
+`deploy/restore-verification.yaml` is a Cloud Build config. It starts a throwaway Postgres,
+fetches the newest dump, restores it, and runs the checks above. Everything dies with the build.
 
 ### Configuration
 
 Restoring needs to **read** objects, which the daily freshness check deliberately cannot do, so
-it uses its own identity rather than widening that one:
+it gets its own identity rather than widening that one:
 
 ```sh
+gcloud services enable cloudbuild.googleapis.com cloudscheduler.googleapis.com
+
 gcloud iam service-accounts create sotto-backup-restorer \
   --display-name "Reads backups for monthly restore verification"
 
@@ -372,25 +386,51 @@ gcloud storage buckets add-iam-policy-binding gs://sotto-backups-prod \
   --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
   --role roles/storage.objectViewer
 
-# Bound to a GitHub environment, not to the whole repository. This is the only identity in the
-# project that can read a backup, so a workflow that has not declared `environment:
-# backup-restore` cannot assume it, and the environment can additionally require approval.
-gcloud iam service-accounts add-iam-policy-binding \
-  sotto-backup-restorer@<project>.iam.gserviceaccount.com \
-  --role roles/iam.workloadIdentityUser \
-  --member "principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/subject/repo:<owner>/<repo>:environment:backup-restore"
+# Cloud Build needs to be able to act as it, and to write its own logs.
+gcloud projects add-iam-policy-binding <project> \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/logging.logWriter
 ```
 
-Create the `backup-restore` environment in the repository settings, then set the variable
-`GCP_RESTORE_SERVICE_ACCOUNT` and, optionally, the secret `RESTORE_HEARTBEAT_URL`. The job
-reuses `SOTTO_BACKUP_BUCKET` and `GCP_WORKLOAD_IDENTITY_PROVIDER` from the freshness check.
+**Run it by hand before scheduling it.** A drill that has never run is not a drill:
 
-Note that the provider's attribute condition remains the security boundary: without it, the
-provider trusts every GitHub Actions token in existence.
+```sh
+gcloud builds submit --config deploy/restore-verification.yaml \
+  --service-account projects/<project>/serviceAccounts/sotto-backup-restorer@<project>.iam.gserviceaccount.com \
+  --substitutions _BACKUP_BUCKET=gs://sotto-backups-prod .
+```
+
+Then create a trigger and point a monthly schedule at it. The trigger keeps the config in the
+repository, so the drill changes when the code does rather than drifting from it:
+
+```sh
+gcloud builds triggers create manual \
+  --name sotto-backup-restore \
+  --repo https://github.com/<owner>/<repo> --repo-type GITHUB --branch main \
+  --build-config deploy/restore-verification.yaml \
+  --service-account projects/<project>/serviceAccounts/sotto-backup-restorer@<project>.iam.gserviceaccount.com
+
+gcloud scheduler jobs create http sotto-backup-restore \
+  --location <region> --schedule "29 3 4 * *" --time-zone UTC \
+  --uri "https://cloudbuild.googleapis.com/v1/projects/<project>/locations/global/triggers/sotto-backup-restore:run" \
+  --http-method POST --oauth-service-account-email <invoker>@<project>.iam.gserviceaccount.com
+```
+
+The 4th at an odd minute, for the same reason the other schedules avoid round times.
+
+Set `_HEARTBEAT_URL` on the trigger to have success ping an external checker. That is the only
+alerting: a build going red tells nobody, so what raises the alarm is the ping **stopping**,
+which catches the drill failing and the drill quietly no longer being scheduled with the same
+signal. Without it the drill still runs and says on its own log that nothing is watching it.
+
+**What this costs.** Cloud Build bills build-minutes, of which 2,500 a month are free, and a run
+of this takes about five. Cloud Scheduler's first three jobs are free. Reading the bucket from
+the same region is not charged. So the expected bill is nothing, and at list price, with no free
+tier at all, five minutes a month is a few pence a year.
 
 ### Doing it by hand, on any object store
 
-The workflow implements `gs://` because that is what the hosted deployment uses. The drill is
+The bundled config implements `gs://` because that is what the hosted deployment uses. The drill is
 the same everywhere and is worth running by hand once, whatever you store backups in:
 
 ```sh
