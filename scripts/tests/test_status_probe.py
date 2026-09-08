@@ -172,6 +172,19 @@ class Misdirection(unittest.TestCase):
         r = response(303, {"location": "https://github.com/login/oauth/authorize?client_id=x"})
         self.assertEqual(probe.judge_signin(r).state, probe.OK)
 
+    def test_the_two_checks_agree_on_what_a_redirect_is(self):
+        # They read the same list, and they have to. Held apart, a code in one and not the
+        # other means a deployment redirecting with it is either wrongly failed or silently
+        # excused, depending only on which probe happened to see it.
+        github = {"location": "https://github.com/login/oauth/authorize"}
+        elsewhere = {"location": "https://www.example.com/"}
+        for status in probe.REDIRECTS:
+            with self.subTest(status=status):
+                self.assertEqual(probe.judge_signin(response(status, github)).state, probe.OK)
+                astray = probe.judge_signin(response(status, elsewhere))
+                self.assertTrue(astray.fault, "a redirect away from github is a base url fault")
+                self.assertTrue(probe.judge_web(response(status, elsewhere)).fault)
+
     def test_a_readiness_503_still_wins_over_the_redirect_check(self):
         # Ordering matters: a database outage must not be relabelled as a URL problem.
         outcome = probe.judge_api(response(503, body="unavailable"))

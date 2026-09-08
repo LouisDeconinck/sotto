@@ -39,6 +39,12 @@ RETAINED_DAYS = 90
 # that takes longer than this to answer is not serving anyone either.
 TIMEOUT_SECONDS = 15
 
+# Every status that moves a client somewhere else. One list, used by both the probe whose
+# healthy answer is a redirect and the check for a redirect nobody asked for, because two lists
+# drift: with 303 in one and not the other, a deployment redirecting with the missing code was
+# either silently excused or wrongly failed depending on which probe saw it.
+REDIRECTS = (301, 302, 303, 307, 308)
+
 OK = "ok"
 DOWN = "down"
 UNCONFIGURED = "unconfigured"
@@ -101,7 +107,7 @@ def misdirected(response: Response) -> Outcome | None:
     redirecting its own API is having an outage, and a status page that quietly stopped
     counting it would be worse than one that made someone check a URL.
     """
-    if response.status in (301, 302, 307, 308):
+    if response.status in REDIRECTS:
         return Outcome(
             DOWN,
             f"redirected to {origin_of(header(response, 'location'))}; "
@@ -157,7 +163,7 @@ def judge_web(response: Response) -> Outcome:
 def judge_signin(response: Response) -> Outcome:
     location = header(response, "location")
     started = location.startswith("https://github.com/login/oauth/")
-    if response.status in (302, 303, 307) and started:
+    if response.status in REDIRECTS and started:
         return Outcome(OK)
     if response.status == 503:
         return Outcome(UNCONFIGURED, "this deployment has no oauth credentials")
