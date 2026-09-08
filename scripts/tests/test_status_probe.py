@@ -87,8 +87,22 @@ class Misdirection(unittest.TestCase):
             with self.subTest(judge=judge.__name__):
                 outcome = judge(self.redirect())
                 self.assertEqual(outcome.state, probe.DOWN)
-                self.assertIn("redirected to https://getsotto.co.uk/", outcome.detail)
+                self.assertIn("redirected to https://getsotto.co.uk", outcome.detail)
                 self.assertIn("base url", outcome.detail)
+
+    def test_only_the_origin_of_a_redirect_is_recorded(self):
+        # This detail is written to a public branch and kept for ninety days. A proxy can put
+        # state in a redirect's query, and the origin is the whole of what diagnoses the
+        # problem, so nothing after the host is worth the risk of keeping.
+        outcome = probe.judge_web(self.redirect("https://example.com/cb?token=sekrit&id=42"))
+        self.assertIn("https://example.com", outcome.detail)
+        self.assertNotIn("sekrit", outcome.detail)
+        self.assertNotIn("?", outcome.detail)
+
+    def test_a_relative_redirect_is_described_rather_than_echoed(self):
+        outcome = probe.judge_web(self.redirect("/somewhere?token=sekrit"))
+        self.assertNotIn("sekrit", outcome.detail)
+        self.assertIn("no origin", outcome.detail)
 
     def test_sign_in_is_not_caught_by_it(self):
         # The one probe whose healthy answer is a redirect must keep passing.

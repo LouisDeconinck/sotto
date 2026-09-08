@@ -22,6 +22,7 @@ import http.client
 import json
 import os
 import sys
+import urllib.parse
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -96,9 +97,23 @@ def misdirected(response: Response) -> Outcome | None:
     counting it would be worse than one that made someone check a URL.
     """
     if response.status in (301, 302, 307, 308):
-        target = header(response, "location")[:120]
-        return Outcome(DOWN, f"redirected to {target}; the base url must be the origin served")
+        return Outcome(DOWN, f"redirected to {origin_of(header(response, 'location'))}; "
+                             "the base url must be the origin served")
     return None
+
+
+def origin_of(location: str) -> str:
+    """Just the scheme and host of a redirect target, never its path or query.
+
+    Everything worth diagnosing here lives in the origin: a `www` host, or `http` where the
+    deployment serves `https`. The rest is what a proxy might have appended, and this string
+    is written to a public branch and kept for ninety days. The same reasoning keeps response
+    bodies out of [`Response`], and a Location can carry state by exactly that logic.
+    """
+    parts = urllib.parse.urlsplit(location)
+    if not parts.netloc:
+        return "a location with no origin"
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, "", "", ""))
 
 
 def judge_api(response: Response) -> Outcome:
