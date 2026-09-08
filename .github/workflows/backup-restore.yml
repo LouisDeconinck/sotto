@@ -162,7 +162,9 @@ jobs:
           PGPASSWORD: sotto
         run: |
           set -euo pipefail
-          if ! scripts/check-restore --database-url "postgres://sotto:sotto@localhost:5432/restored"; then
+          # The password reaches psql through PGPASSWORD above rather than through this URL,
+          # which is why there is none in it. See the note in the script.
+          if ! scripts/check-restore --database-url "postgres://sotto@localhost:5432/restored"; then
             echo "reason=The newest backup (${{ steps.fetch.outputs.object }}) restored, but the result did not check out. See the run log for which assertion failed." >> "$GITHUB_OUTPUT"
             exit 1
           fi

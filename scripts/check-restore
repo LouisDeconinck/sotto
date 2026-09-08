@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 
 # Tables whose emptiness would mean the dump restored but carried nothing worth restoring.
 # A backup of the wrong database, or of one truncated before the dump, passes every structural
@@ -38,18 +39,42 @@ MUST_EXIST = (
 MIGRATIONS_TABLE = "_sqlx_migrations"
 
 
+def connection_env(url: str) -> dict[str, str]:
+    """A connection URL taken apart into the variables psql reads from the environment.
+
+    The password never becomes an argument. Two things go wrong when it does, and both matter
+    more here than the throwaway credential this job happens to use: argv is world readable on
+    the host, so `ps` hands the password to any local user, and a failed command raises a
+    `CalledProcessError` whose text is the argument list, which on a public runner writes it
+    into a log that is public for ever. This script is documented for running by hand against a
+    scratch database on a real host, where the password would be a real one.
+    """
+    parts = urllib.parse.urlsplit(url)
+    env = dict(os.environ)
+    env["PGHOST"] = parts.hostname or "localhost"
+    env["PGDATABASE"] = parts.path.lstrip("/")
+    if parts.port:
+        env["PGPORT"] = str(parts.port)
+    if parts.username:
+        env["PGUSER"] = urllib.parse.unquote(parts.username)
+    if parts.password:
+        env["PGPASSWORD"] = urllib.parse.unquote(parts.password)
+    return env
+
+
 class Database:
     """A psql that returns one column of rows, so the checks below can be tested without one."""
 
     def __init__(self, url: str):
-        self.url = url
+        self.env = connection_env(url)
 
     def rows(self, sql: str) -> list[str]:
         result = subprocess.run(
-            ["psql", self.url, "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
+            ["psql", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
             capture_output=True,
             text=True,
             check=True,
+            env=self.env,
         )
         return [line for line in result.stdout.splitlines() if line != ""]
 

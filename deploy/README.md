@@ -402,7 +402,7 @@ createdb restored
 pg_restore -d restored --no-owner --no-privileges <dump>
 
 # Check what came back.
-scripts/check-restore --database-url postgres://localhost/restored
+scripts/check-restore --database-url postgres://localhost/restored   # no password in the URL
 ```
 
 Record the result in `deploy/rehearsals/` the way the existing entries do. A drill nobody writes

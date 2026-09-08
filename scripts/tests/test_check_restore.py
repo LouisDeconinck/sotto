@@ -7,9 +7,11 @@ that stops being true, which is the same failure the backup cron itself had.
 
 import importlib.machinery
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +78,38 @@ class Emptiness(unittest.TestCase):
 
     def test_rows_present_passes(self):
         self.assertEqual(restore.check_not_empty({"users": 1, "organizations": 1}), [])
+
+
+class Credentials(unittest.TestCase):
+    def test_the_password_never_becomes_an_argument(self):
+        # Two failures, one fix. `ps` shows argv to every local user, and a failed subprocess
+        # raises an error whose text is the argument list, which on a public runner is a public
+        # log. The job here uses a throwaway password; an operator running this by hand against
+        # a scratch database on a real host would not be.
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            captured["env"] = kwargs["env"]
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        with unittest.mock.patch.object(subprocess, "run", fake_run):
+            restore.Database("postgres://sotto:hunter2@db.example:5433/restored").rows("SELECT 1")
+
+        self.assertNotIn("hunter2", " ".join(captured["argv"]))
+        self.assertEqual(captured["env"]["PGPASSWORD"], "hunter2")
+        self.assertEqual(captured["env"]["PGHOST"], "db.example")
+        self.assertEqual(captured["env"]["PGPORT"], "5433")
+        self.assertEqual(captured["env"]["PGDATABASE"], "restored")
+
+    def test_a_url_with_no_credentials_still_works(self):
+        env = restore.connection_env("postgres://localhost/restored")
+        self.assertNotIn("PGPASSWORD", env)
+        self.assertEqual(env["PGDATABASE"], "restored")
+
+    def test_an_escaped_password_is_handed_over_decoded(self):
+        env = restore.connection_env("postgres://u:p%40ss%3Aword@localhost/db")
+        self.assertEqual(env["PGPASSWORD"], "p@ss:word")
 
 
 class RepositoryMigrations(unittest.TestCase):
