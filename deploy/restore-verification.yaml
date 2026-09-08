@@ -45,10 +45,21 @@ steps:
         esac
         # Newest by creation time, which is what backup.sh stamps into the name as well. The
         # listing is names and times only: no object is read to choose one.
+        # Named the way backup.sh names them, `sotto-<stamp>.dump`, rather than any .dump that
+        # happens to share the location: a bucket is somewhere people put things, and restoring
+        # an unrelated archive would fail in a way that reads like a broken backup.
+        #
+        # The whole destination is used, prefix included, because backup.sh writes to
+        # "$$SOTTO_BACKUP_BUCKET/sotto-<stamp>.dump" and a configured prefix is part of that.
+        #
         # `ls --long` ends with a "TOTAL:" summary line, so match on the object URL rather than
         # taking the last line, which would otherwise pick the summary and pass it to `cp`.
-        newest="$$(gcloud storage ls --long "$${bucket}/*.dump" \
-          | awk '$$NF ~ /^gs:\/\// {print $$2, $$NF}' | sort | tail -1 | awk '{print $$2}')"
+        # Tolerate the listing failing so the message below is the one that gets read. `ls`
+        # exits non-zero when nothing matches, and under pipefail that would end the step with
+        # "One or more URLs matched no objects" instead of saying there are no backups, which
+        # is the single most alarming thing this drill can discover.
+        newest="$$(gcloud storage ls --long "$${bucket}/sotto-*.dump" 2>/dev/null \
+          | awk '$$NF ~ /^gs:\/\// {print $$2, $$NF}' | sort | tail -1 | awk '{print $$2}' || true)"
         if [ -z "$$newest" ]; then
           echo "the backup bucket holds no dumps, so there is nothing to restore" >&2
           exit 1
