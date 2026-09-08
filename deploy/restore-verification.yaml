@@ -17,6 +17,26 @@
 # it choked on.
 
 steps:
+  # Fetch the source rather than having it uploaded. `gcloud builds submit` would otherwise
+  # stage a tarball in a bucket, and that upload fails under workload identity federation with
+  # a message about `serviceusage.services.use` that is not about any permission the service
+  # account is missing: it can read, write and delete in that bucket, verified by impersonating
+  # it. Removing the upload removes the question.
+  #
+  # The repository is public, so this needs no credential, and pinning the revision means the
+  # drill runs the commit that asked for it rather than whatever main became meanwhile.
+  - id: source
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        git init -q .
+        git fetch -q --depth 1 "${_REPOSITORY}" "${_REVISION}"
+        git checkout -q FETCH_HEAD
+        echo "drilling $$(git rev-parse --short HEAD)"
+
   # Cloud Build runs every step on the `cloudbuild` docker network, so a database started here
   # is reachable as `postgres` by each step that follows. It dies with the build, as does the
   # workspace the dump is downloaded into. Neither the production host nor a GitHub runner ever
@@ -144,6 +164,8 @@ steps:
         curl -fsS --retry 3 --max-time 30 "${_HEARTBEAT_URL}" > /dev/null
 
 substitutions:
+  _REPOSITORY: https://github.com/getsotto/sotto
+  _REVISION: main
   _BACKUP_BUCKET: gs://sotto-backups-prod
   # Left empty by default so the drill runs without one, and says so rather than failing.
   _HEARTBEAT_URL: ""

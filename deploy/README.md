@@ -416,10 +416,14 @@ bucket already exists.
 **Run it by hand before scheduling it.** A drill that has never run is not a drill:
 
 ```sh
-gcloud builds submit --config deploy/restore-verification.yaml \
+gcloud builds submit --no-source --config deploy/restore-verification.yaml \
   --service-account projects/<project>/serviceAccounts/sotto-backup-restorer@<project>.iam.gserviceaccount.com \
-  --substitutions _BACKUP_BUCKET=gs://sotto-backups-prod .
+  --substitutions _BACKUP_BUCKET=gs://sotto-backups-prod
 ```
+
+Nothing is uploaded: the build fetches the source from the public repository itself, so no
+staging bucket is involved. Add `_REVISION=<branch or sha>` to drill a branch rather than `main`.
+
 
 ### Scheduling it
 
