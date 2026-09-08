@@ -1,0 +1,79 @@
+name: Backup restore
+
+# Schedules the monthly restore drill. It does not perform it: the work happens in Cloud Build
+# inside the project that already holds the backup, so the dump and the personal data in it
+# never reach a runner. What travels from here is the source of this repository, which is public
+# anyway. See deploy/restore-verification.yaml for what actually runs.
+#
+# The split is deliberate. The schedule and the drill both belong in the repository, where they
+# change with the code and get reviewed; the data belongs where it already is. A Cloud Build
+# trigger would have kept both in GCP but needs a GitHub App connection, which is a standing
+# authorisation over this repository that nothing else here requires.
+
+on:
+  schedule:
+    # The 4th at an odd minute, away from the 1st and away from the top of the hour, where
+    # GitHub's queue is slowest. Monthly, so arriving hours late costs nothing.
+    - cron: "29 3 4 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: backup-restore
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    name: run the restore drill in Cloud Build
+    if: github.repository == 'getsotto/sotto'
+    runs-on: ubuntu-latest
+    permissions:
+      # Mint the OIDC token exchanged for short-lived credentials. This identity may start a
+      # build and act as the restorer; it cannot read a backup itself.
+      id-token: write
+    steps:
+      - name: Check whether the drill is configured
+        id: config
+        env:
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SUBMITTER: ${{ vars.GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT }}
+          RESTORER: ${{ vars.GCP_RESTORE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PROVIDER" ] || [ -z "$SUBMITTER" ] || [ -z "$RESTORER" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "The restore drill is not configured; see deploy/README.md." >&2
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.configured == 'true'
+
+      - name: Authenticate to Google Cloud
+        if: steps.config.outputs.configured == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        if: steps.config.outputs.configured == 'true'
+
+      - name: Submit the drill
+        if: steps.config.outputs.configured == 'true'
+        env:
+          RESTORER: ${{ vars.GCP_RESTORE_SERVICE_ACCOUNT }}
+          BUCKET: ${{ vars.SOTTO_BACKUP_BUCKET }}
+          HEARTBEAT_URL: ${{ secrets.RESTORE_HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          project="$(gcloud config get-value project)"
+          # Runs in the foreground, so this job's success is the drill's success and its failure
+          # is the drill's failure. The build's own log carries the verdict; nothing is repeated
+          # here, because that log is private to the project and this one is not.
+          gcloud builds submit . \
+            --config deploy/restore-verification.yaml \
+            --service-account "projects/${project}/serviceAccounts/${RESTORER}" \
+            --substitutions "_BACKUP_BUCKET=${BUCKET},_HEARTBEAT_URL=${HEARTBEAT_URL}"

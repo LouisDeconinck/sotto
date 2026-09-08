@@ -412,28 +412,48 @@ gcloud builds submit --config deploy/restore-verification.yaml \
   --substitutions _BACKUP_BUCKET=gs://sotto-backups-prod .
 ```
 
-Then create a trigger and point a monthly schedule at it. The trigger keeps the config in the
-repository, so the drill changes when the code does rather than drifting from it:
+### Scheduling it
+
+`.github/workflows/backup-restore.yml` runs that same command monthly. It schedules the drill
+and does not perform it: the build happens inside the project, so the dump never reaches a
+runner, and what travels from GitHub is this repository's own source, which is public anyway.
+
+A Cloud Build trigger would have kept the scheduling in the project too, and is the obvious
+choice until you try it. It needs a GitHub App connection, which is a standing authorisation
+over the repository, and nothing else in this project requires one. Scheduling from a workflow
+that already federates costs no new trust, and keeps the schedule in the repository next to the
+drill it runs.
+
+That workflow needs an identity that may **start** a build without being able to read a backup:
 
 ```sh
-gcloud builds triggers create manual \
-  --name sotto-backup-restore \
-  --repo https://github.com/<owner>/<repo> --repo-type GITHUB --branch main \
-  --build-config deploy/restore-verification.yaml \
-  --service-account projects/<project>/serviceAccounts/sotto-backup-restorer@<project>.iam.gserviceaccount.com
+gcloud iam service-accounts create sotto-build-submitter \
+  --display-name "Starts the monthly restore build"
 
-gcloud scheduler jobs create http sotto-backup-restore \
-  --location <region> --schedule "29 3 4 * *" --time-zone UTC \
-  --uri "https://cloudbuild.googleapis.com/v1/projects/<project>/locations/global/triggers/sotto-backup-restore:run" \
-  --http-method POST --oauth-service-account-email <invoker>@<project>.iam.gserviceaccount.com
+gcloud projects add-iam-policy-binding <project> \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/cloudbuild.builds.editor
+
+# Start a build that runs as the restorer, without holding the restorer's read access itself.
+gcloud iam service-accounts add-iam-policy-binding \
+  sotto-backup-restorer@<project>.iam.gserviceaccount.com \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/iam.serviceAccountUser
+
+# Let this repository's workflows assume it, through the provider the freshness check already uses.
+gcloud iam service-accounts add-iam-policy-binding \
+  sotto-build-submitter@<project>.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
 ```
 
-The 4th at an odd minute, for the same reason the other schedules avoid round times.
+Then set the repository variables `GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT` and
+`GCP_RESTORE_SERVICE_ACCOUNT`, and optionally the secret `RESTORE_HEARTBEAT_URL`. The workflow
+skips while any of them is unset.
 
-Set `_HEARTBEAT_URL` on the trigger to have success ping an external checker. That is the only
-alerting: a build going red tells nobody, so what raises the alarm is the ping **stopping**,
-which catches the drill failing and the drill quietly no longer being scheduled with the same
-signal. Without it the drill still runs and says on its own log that nothing is watching it.
+Note the separation, which is the point of the second account: the identity GitHub can assume
+may start builds and act as the restorer, but holds no access to the bucket. The identity that
+can read backups cannot be assumed from GitHub at all.
 
 **What this costs.** Cloud Build bills build-minutes, of which 2,500 a month are free, and a run
 of this takes about five. Cloud Scheduler's first three jobs are free. Reading the bucket from
