@@ -390,7 +390,19 @@ gcloud storage buckets add-iam-policy-binding gs://sotto-backups-prod \
 gcloud projects add-iam-policy-binding <project> \
   --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
   --role roles/logging.logWriter
+
+# And to read the source it was handed. A build running as its own service account fetches the
+# uploaded source itself rather than inheriting the caller's access, so without this the build
+# fails before it starts with a 403 on the staging bucket, which reads like a problem with the
+# backup bucket and is not one.
+gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectViewer
 ```
+
+The staging bucket appears the first time you submit a build, so run the submit below once,
+expect that failure, then grant this and run it again. Granting it up front works too if the
+bucket already exists.
 
 **Run it by hand before scheduling it.** A drill that has never run is not a drill:
 
