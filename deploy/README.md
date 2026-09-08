@@ -348,6 +348,23 @@ and appends what it saw to an orphan `status-history` branch, which shares no hi
 
 Set the repository variable `SOTTO_PUBLIC_URL` to the deployment to watch. Without it the job
 skips rather than probing a default, so a fork cannot point it at somebody else's instance.
+Set the secret `STATUS_HEARTBEAT_URL` too, from any external checker: the collector pings it
+after each round of samples is pushed, and the checker alerting when those pings stop is the
+only thing that can notice this job dying or running green while sampling nothing. Allow that
+monitor a generous grace period, hours rather than minutes, because GitHub queues scheduled
+workflows rather than guaranteeing them and a run arriving late is not a run that failed.
+
+Two things to get right before setting the variable, because both write a wrong answer into a
+record that is meant to be permanent:
+
+- **Point it at the origin the deployment actually serves**, with the scheme it serves on. No
+  probe follows redirects, so a `www` host or an `http` URL that the deployment folds onto its
+  canonical origin reads as every component being down, for as long as it is left that way. A
+  redirect is recorded with a detail saying so rather than a bare failure, but the tally still
+  counts it.
+- **Wait until the deployment serves `/health/ready`**, which means version 0.7.0 or later.
+  Before that the path falls through to the single page app, and the API row records real
+  downtime for a deployment that is working.
 
 Every probe is unauthenticated and asks only what a visitor could ask:
 
@@ -381,8 +398,32 @@ paging belongs to an external monitor that survives this repository being unreac
 workflow that went red on every blip would train everyone to ignore the failure that matters
 here, which is the collector itself dying.
 
-Run `scripts/status-probe --base-url <url> --data-dir <dir>` to sample by hand. Its verdict
-logic is covered by `scripts/tests/test_status_probe.py`.
+The sign-in probe is the one that writes: starting the OAuth flow records a short-lived login
+row, which the same endpoint clears on its next call. That is deliberate, since it exercises
+the write path rather than only a read, but it is worth knowing that this probe is not purely
+an observer.
+
+### Running it somewhere other than GitHub Actions
+
+Nothing about the check needs GitHub. `scripts/status-probe --base-url <url> --data-dir <dir>`
+is Python 3 with no dependencies beyond the standard library, and the data directory is a
+directory of files. Run it from cron, a systemd timer, or any other scheduler:
+
+```sh
+*/10 * * * * /path/to/scripts/status-probe --base-url https://example.com --data-dir /var/lib/sotto-status
+```
+
+Serve or sync that directory however suits you: a static host, an object store, a commit to
+any git host. The workflow adds three things and no more, so anything that does them is
+equivalent: it runs the script on a schedule, keeps the output somewhere durable, and pings a
+heartbeat afterwards so the check being dead is noticeable.
+
+The verdict logic is covered by `scripts/tests/test_status_probe.py`.
+
+One caveat if you keep the history in git, as the bundled workflow does: the samples age out
+with the summary, but the commits do not. At this interval that is roughly fifty thousand
+commits a year on a branch nothing else reads. Deleting the branch is a safe reset if it ever
+becomes awkward, since the next run recreates it, at the cost of the history it held.
 
 ## Organisation-deletion metrics
 
