@@ -9,6 +9,7 @@ that looks healthy from outside.
 
 import contextlib
 import datetime as dt
+import http.client
 import importlib.machinery
 import importlib.util
 import json
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import unittest
 import unittest.mock
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -115,8 +117,12 @@ class WrongBaseUrl(unittest.TestCase):
         # The distinction that makes the refusal safe: a deployment that is gone refuses
         # connections, it does not politely redirect them. That must keep being written down,
         # and must keep heartbeating, because the collector is working perfectly.
+        def refuse(*_args, **_kwargs):
+            raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+
         with tempfile.TemporaryDirectory() as d:
-            code = self.run_probe("http://127.0.0.1:1", d)
+            with unittest.mock.patch.object(probe, "fetch", refuse):
+                code = self.run_probe("https://example.invalid", d)
             self.assertEqual(code, 0)
             summary = probe.load(d)
             api = next(c for c in summary["components"] if c["id"] == "api")
@@ -228,11 +234,24 @@ class Observation(unittest.TestCase):
         return probe.Probe(id="t", name="T", description="", method="GET", path=path, judge=judge)
 
     def test_a_transport_failure_is_recorded_as_the_component_being_gone(self):
-        # Nothing is listening on port 1, so this is a real connection refusal rather than a
-        # stubbed one, and it is the honest reading: no visitor could have used it either.
-        outcomes = probe.observe("http://127.0.0.1:1", [self.probe_for(probe.judge_web)])
+        # Raised rather than provoked. An earlier version dialled a port it assumed nothing
+        # was listening on, which is not true on every machine: a local proxy answered and the
+        # test failed on a correct verdict. The exception type is the thing being tested, so
+        # it is the thing to supply.
+        def refuse(*_args, **_kwargs):
+            raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+
+        with unittest.mock.patch.object(probe, "fetch", refuse):
+            outcomes = probe.observe("https://example.invalid", [self.probe_for(probe.judge_web)])
         self.assertEqual(outcomes["t"].state, probe.DOWN)
         self.assertIn("URLError", outcomes["t"].detail)
+
+    def test_the_caught_types_are_the_ones_a_network_actually_raises(self):
+        # URLError is an OSError and a truncated reply is an HTTPException, so both must land
+        # in the transport branch rather than escaping as a collector defect.
+        self.assertIsInstance(urllib.error.URLError("x"), probe.TRANSPORT_FAILURES)
+        self.assertIsInstance(http.client.RemoteDisconnected("x"), probe.TRANSPORT_FAILURES)
+        self.assertIsInstance(TimeoutError(), probe.TRANSPORT_FAILURES)
 
     def test_a_broken_verdict_raises_rather_than_reporting_an_outage(self):
         # The failure this guards against is subtle and bad: a defect in our own code recorded
