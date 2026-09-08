@@ -200,6 +200,14 @@ jobs:
           set -euo pipefail
           output="$(scripts/check-restore --database-url "$DATABASE_URL" 2>&1 || true)"
           printf '%s\n' "$output"
+          # Prove it ran before reading anything into what it did not say. Searching only for
+          # failure phrases passes a script that never started: no psql, no connection, a syntax
+          # error on the first line, all produce output containing none of them. This line is
+          # printed only after every query has returned.
+          if ! printf '%s' "$output" | grep -q "tables restored:"; then
+            echo "the restore checker did not reach a verdict, so nothing below was tested" >&2
+            exit 1
+          fi
           # Row counts are not asserted: what a test run leaves behind is not this job's
           # business. Structure is, and none of these may ever appear against a healthy schema.
           for unexpected in "recorded as failed" "missing from the restored database" \
