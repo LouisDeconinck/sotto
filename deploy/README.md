@@ -367,9 +367,10 @@ log that only holds what it should is one you can paste into an issue without re
 
 ### Where it runs, and why not with the other checks
 
-Every other check here is a GitHub Actions workflow. This one is not, and the reason is what a
-dump contains. Secret names and values are ciphertext, so a backup gives up nothing about them.
-The metadata is plain text: user emails, OAuth identities, the grant graph, timestamps. Running
+Every other check here runs its work on a GitHub runner. This one is scheduled from one and
+runs its work in your Cloud project, and the reason is what a dump contains. Secret names and
+values are ciphertext, so a backup gives up nothing about them. The metadata is plain text: user
+emails, OAuth identities, the grant graph, timestamps. Running
 the drill inside the project that already holds the bucket means none of that is copied to
 another party to prove a point about it, and the same-region read costs nothing.
 
@@ -478,9 +479,10 @@ may start builds and act as the restorer, but holds no access to the bucket. The
 can read backups cannot be assumed from GitHub at all.
 
 **What this costs.** Cloud Build bills build-minutes, of which 2,500 a month are free, and a run
-of this takes about five. Cloud Scheduler's first three jobs are free. Reading the bucket from
-the same region is not charged. So the expected bill is nothing, and at list price, with no free
-tier at all, five minutes a month is a few pence a year.
+of this takes about five. The schedule is a GitHub Actions cron, which is free for a public
+repository, so no Cloud Scheduler job is needed. Reading the bucket from the same region is not
+charged. So the expected bill is nothing, and at list price with no free tier at all, five
+minutes a month is a few pence a year.
 
 ### Doing it by hand, on any object store
 
