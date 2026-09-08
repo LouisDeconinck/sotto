@@ -191,6 +191,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Server + end-to-end tests (with Postgres)
         run: cargo test -p sotto-server -p sotto-cli
+      - name: Restore checker meets a real database
+        # Its assertions are unit tested, but its queries are not: left alone they would only
+        # ever meet a database when the monthly restore runs, which is a poor place to discover
+        # a typo. The schema here is the one a restored dump produces, so running it now proves
+        # every query executes and every structural check passes against the current migrations.
+        run: |
+          set -euo pipefail
+          status=0
+          scripts/check-restore --database-url "$DATABASE_URL" > check.log 2>&1 || status=$?
+          cat check.log
+
+          # Printed only after every query has returned, so its absence means the checker never
+          # reached a verdict: no psql, no connection, a syntax error on the first line. Reading
+          # anything into what it did not say would be reading a blank page.
+          if ! grep -q "tables restored:" check.log; then
+            echo "the restore checker did not reach a verdict, so nothing was tested" >&2
+            exit 1
+          fi
+
+          # One tolerated failure, and only when it is the whole of what went wrong. A fresh
+          # database can legitimately have no rows in it, and what a test run leaves behind is
+          # not this job's business. Everything else is: a missing deletion table alongside an
+          # empty one must not ride in on the empty one's excuse, so every complaint has to be
+          # that complaint, and a non-zero exit with no complaint at all is a crash.
+          if [ "$status" -ne 0 ]; then
+            if ! grep -q "^FAIL:" check.log \
+               || grep "^FAIL:" check.log | grep -qv "restored but empty"; then
+              echo "the restore checker disagreed with a freshly migrated database" >&2
+              exit 1
+            fi
+          fi
 
   funnel-e2e:
     name: funnel regression suite (Launch gate 4)

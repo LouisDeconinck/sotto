@@ -1,0 +1,154 @@
+# Monthly proof that the newest backup restores, run inside the project that already holds it.
+#
+# `backup.sh` validates each archive with `pg_restore --list` before upload, which proves the
+# file is not truncated and nothing more. It cannot tell you the bytes survived the trip to the
+# bucket, nor that what comes back is a database this code could run on. Only restoring answers
+# those, and a drill nobody repeats stops being true, which is exactly how the nightly backup
+# came to be uninstalled for two months with the runbook describing it the whole time.
+#
+# Why Cloud Build rather than GitHub Actions, which is where every other check here lives: a
+# dump carries user emails, OAuth identities and the grant graph in plain text. Only the secrets
+# themselves are ciphertext. Restoring inside this project means that metadata never leaves the
+# provider already holding the backup, and the same-region read costs nothing. The setup is in
+# deploy/README.md.
+#
+# Nothing here prints data. Counts, table names and migration versions are safe to say out loud;
+# pg_restore's log is kept in the build workspace and never echoed, because it can quote the SQL
+# it choked on.
+
+steps:
+  # Cloud Build runs every step on the `cloudbuild` docker network, so a database started here
+  # is reachable as `postgres` by each step that follows. It dies with the build, as does the
+  # workspace the dump is downloaded into. Neither the production host nor a GitHub runner ever
+  # holds the file: the host by design cannot read what it wrote, and the runner that schedules
+  # this uploads only this repository's public source.
+  - id: database
+    name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --detach
+      - --name=postgres
+      - --network=cloudbuild
+      - --env=POSTGRES_USER=sotto
+      - --env=POSTGRES_PASSWORD=restore
+      - --env=POSTGRES_DB=postgres
+      - postgres:16
+
+  - id: fetch
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        bucket="${_BACKUP_BUCKET}"
+        # backup.sh writes to gs://, s3:// and rclone remotes, and this file is a Cloud Build
+        # config, so it can only speak the first. That is a limit of the vehicle rather than of
+        # the drill: the same three commands run against any store, and the runbook shows them.
+        # Say which, and where to look, rather than leaving someone to read this as their
+        # storage being unsupported.
+        case "$$bucket" in
+          gs://*) ;;
+          *)
+            echo "This config restores from gs:// destinations. For $${bucket%%:*}, run the" >&2
+            echo "same drill from any scheduler; see deploy/README.md, Doing it by hand." >&2
+            exit 1
+            ;;
+        esac
+        # Newest by creation time, which is what backup.sh stamps into the name as well. The
+        # listing is names and times only: no object is read to choose one.
+        # Named the way backup.sh names them, `sotto-<stamp>.dump`, rather than any .dump that
+        # happens to share the location: a bucket is somewhere people put things, and restoring
+        # an unrelated archive would fail in a way that reads like a broken backup.
+        #
+        # The whole destination is used, prefix included, because backup.sh writes to
+        # "$$SOTTO_BACKUP_BUCKET/sotto-<stamp>.dump" and a configured prefix is part of that.
+        #
+        # `ls --long` ends with a "TOTAL:" summary line, so match on the object URL rather than
+        # taking the last line, which would otherwise pick the summary and pass it to `cp`.
+        # Tolerate the listing failing so the message below is the one that gets read. `ls`
+        # exits non-zero when nothing matches, and under pipefail that would end the step with
+        # "One or more URLs matched no objects" instead of saying there are no backups, which
+        # is the single most alarming thing this drill can discover.
+        newest="$$(gcloud storage ls --long "$${bucket}/sotto-*.dump" 2>/dev/null \
+          | awk '$$NF ~ /^gs:\/\// {print $$2, $$NF}' | sort | tail -1 | awk '{print $$2}' || true)"
+        if [ -z "$$newest" ]; then
+          echo "the backup bucket holds no dumps, so there is nothing to restore" >&2
+          exit 1
+        fi
+        gcloud storage cp "$$newest" /workspace/backup.dump
+        # Name and size only. Both are already recorded in deploy/rehearsals, and neither says
+        # anything about what is inside.
+        echo "restoring $${newest} ($$(wc -c < /workspace/backup.dump) bytes)"
+        printf '%s' "$$newest" > /workspace/object-name
+
+  - id: restore
+    name: postgres:16
+    entrypoint: bash
+    env:
+      - PGHOST=postgres
+      - PGUSER=sotto
+      - PGPASSWORD=restore
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        for attempt in $$(seq 30); do
+          pg_isready -q && break
+          sleep 2
+        done
+        pg_isready
+        createdb restored
+        # --no-owner because the dump's roles do not exist here, and that is not what is being
+        # tested. Errors are counted rather than ignored: pg_restore exits non-zero for a
+        # genuinely broken archive, but it also warns about things that do not matter, and the
+        # difference should be visible rather than swallowed.
+        status=0
+        pg_restore --dbname=restored --no-owner --no-privileges \
+          /workspace/backup.dump 2> /workspace/restore.log || status=$$?
+        errors="$$(grep -c '^pg_restore: error' /workspace/restore.log || true)"
+        echo "pg_restore reported $${errors} errors"
+        if [ "$$status" -ne 0 ] || [ "$$errors" -ne 0 ]; then
+          echo "the newest backup did not restore; the log stays in the workspace because it" >&2
+          echo "can quote data. Reproduce with the drill in deploy/README.md." >&2
+          exit 1
+        fi
+
+  - id: check
+    name: python:3.12-slim
+    entrypoint: bash
+    env:
+      - PGPASSWORD=restore
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client
+        scripts/check-restore --database-url "postgres://sotto@postgres:5432/restored"
+
+  # Only reached when every step above succeeded, because Cloud Build stops at the first
+  # failure. That is the whole alerting design: whichever external checker owns this URL alerts
+  # when the pings stop, so a drill that fails, or one that quietly stops being scheduled, is
+  # noticed by something outside it. A build that goes red on its own tells nobody.
+  - id: heartbeat
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ -z "${_HEARTBEAT_URL}" ]; then
+          echo "no heartbeat configured; nothing is watching this drill." >&2
+          exit 0
+        fi
+        curl -fsS --retry 3 --max-time 30 "${_HEARTBEAT_URL}" > /dev/null
+
+substitutions:
+  _BACKUP_BUCKET: gs://sotto-backups-prod
+  # Left empty by default so the drill runs without one, and says so rather than failing.
+  _HEARTBEAT_URL: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s

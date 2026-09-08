@@ -331,6 +331,180 @@ rather than refuses is reported as unavailable rather than holding the request o
 apart from "the box is up and the database is not". Keep it pointed at `/health` for that
 distinction to mean anything.
 
+## Restore verification
+
+A backup nobody has restored is a hope. `backup.sh` validates each archive with
+`pg_restore --list` before upload, which proves the file is not truncated and nothing more. It
+cannot tell you the bytes survived the trip to the bucket, and it cannot tell you that what
+comes back is a database this code could run on. Only restoring one answers those.
+
+`deploy/restore-verification.yaml` does it monthly: fetch the newest object, restore it into a
+throwaway Postgres that dies with the build, and check what came back.
+
+Where the dump goes is worth stating rather than leaving to inference. It is downloaded into the
+build's own workspace and restored into a container beside it, both inside your Cloud project,
+and both destroyed when the build ends. It never touches the production host, which by design
+cannot read what it wrote, and it never reaches a GitHub runner: the workflow that schedules
+this uploads only this repository's source, which is public.
+
+What it asserts, which is the rehearsal of 2026-08-31 written down:
+
+- `pg_restore` completes with no errors;
+- every migration the dump recorded is marked successful, and none is a version this checkout
+  does not carry. A deployment **behind** the branch passes: production is often a release or
+  two back, and failing every month in between would train everyone to ignore the job. A
+  deployment **ahead** fails, because a dump carrying schema this code does not know is not one
+  this code can be restored onto;
+- the organisation-deletion tables are present, named because deletion is the one operation
+  Sotto cannot undo from inside the product, so this backup is the only thing behind it;
+- the tables that must never be empty are not. A dump of the wrong database, or one taken after
+  a truncation, passes every structural check ever written and fails this one.
+
+Nothing the job prints is data. Counts, table names and migration versions are safe to say out
+loud; `pg_restore`'s error log stays in the build workspace even on failure, because it can quote
+the SQL it choked on. The build logs are private to the project, and this is careful anyway: a
+log that only holds what it should is one you can paste into an issue without reading it twice.
+
+### Where it runs, and why not with the other checks
+
+Every other check here runs its work on a GitHub runner. This one is scheduled from one and
+runs its work in your Cloud project, and the reason is what a dump contains. Secret names and
+values are ciphertext, so a backup gives up nothing about them. The metadata is plain text: user
+emails, OAuth identities, the grant graph, timestamps. Running
+the drill inside the project that already holds the bucket means none of that is copied to
+another party to prove a point about it, and the same-region read costs nothing.
+
+`deploy/restore-verification.yaml` is a Cloud Build config. It starts a throwaway Postgres,
+fetches the newest dump, restores it, and runs the checks above. Everything dies with the build.
+
+### Configuration
+
+Restoring needs to **read** objects, which the daily freshness check deliberately cannot do, so
+it gets its own identity rather than widening that one:
+
+```sh
+gcloud services enable cloudbuild.googleapis.com cloudscheduler.googleapis.com
+
+gcloud iam service-accounts create sotto-backup-restorer \
+  --display-name "Reads backups for monthly restore verification"
+
+gcloud storage buckets add-iam-policy-binding gs://sotto-backups-prod \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectViewer
+
+# A build running as this account writes its own logs, so without this it cannot start. The
+# separate grant that lets something *act as* this account is further down, with the schedule:
+# a human with project access already has it, which is why the manual submit below works before
+# that grant exists.
+gcloud projects add-iam-policy-binding <project> \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/logging.logWriter
+
+# And to read the source it was handed. A build running as its own service account fetches the
+# uploaded source itself rather than inheriting the caller's access, so without this the build
+# fails before it starts with a 403 on the staging bucket, which reads like a problem with the
+# backup bucket and is not one.
+gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectViewer
+```
+
+The staging bucket appears the first time you submit a build, so run the submit below once,
+expect that failure, then grant this and run it again. Granting it up front works too if the
+bucket already exists.
+
+**Run it by hand before scheduling it.** A drill that has never run is not a drill:
+
+```sh
+gcloud builds submit --config deploy/restore-verification.yaml \
+  --service-account projects/<project>/serviceAccounts/sotto-backup-restorer@<project>.iam.gserviceaccount.com \
+  --substitutions _BACKUP_BUCKET=gs://sotto-backups-prod .
+```
+
+### Scheduling it
+
+`.github/workflows/backup-restore.yml` runs that same command monthly. It schedules the drill
+and does not perform it: the build happens inside the project, so the dump never reaches a
+runner, and what travels from GitHub is this repository's own source, which is public anyway.
+
+A Cloud Build trigger would have kept the scheduling in the project too, and is the obvious
+choice until you try it. It needs a GitHub App connection, which is a standing authorisation
+over the repository, and nothing else in this project requires one. Scheduling from a workflow
+that already federates costs no new trust, and keeps the schedule in the repository next to the
+drill it runs.
+
+On another provider the shape is the same and only the nouns change: a scheduled container with
+read access to the backup store, running the three commands from **Doing it by hand** below. A
+scheduled task or a build service will do it; nothing here depends on Cloud Build beyond it
+being what this deployment already has.
+
+That workflow needs an identity that may **start** a build without being able to read a backup:
+
+```sh
+gcloud iam service-accounts create sotto-build-submitter \
+  --display-name "Starts the monthly restore build"
+
+gcloud projects add-iam-policy-binding <project> \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/cloudbuild.builds.editor
+
+# Start a build that runs as the restorer, without holding the restorer's read access itself.
+gcloud iam service-accounts add-iam-policy-binding \
+  sotto-backup-restorer@<project>.iam.gserviceaccount.com \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/iam.serviceAccountUser
+
+# Let this repository's workflows assume it, through the provider the freshness check already uses.
+gcloud iam service-accounts add-iam-policy-binding \
+  sotto-build-submitter@<project>.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
+
+# And to upload the source it submits. `roles/cloudbuild.builds.editor` carries eleven
+# permissions and not one of them is storage, so without this the submit fails on the staging
+# bucket rather than on anything to do with backups. objectAdmin rather than objectCreator
+# because a creator that cannot list cannot upload either, which is the same trap the backup
+# writer hit.
+gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectAdmin
+```
+
+Then set the repository variables `GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT` and
+`GCP_RESTORE_SERVICE_ACCOUNT`, and optionally the secret `RESTORE_HEARTBEAT_URL`. The workflow
+skips while any of them is unset.
+
+Note the separation, which is the point of the second account: the identity GitHub can assume
+may start builds and act as the restorer, but holds no access to the bucket. The identity that
+can read backups cannot be assumed from GitHub at all.
+
+**What this costs.** Cloud Build bills build-minutes, of which 2,500 a month are free, and a run
+of this takes about five. The schedule is a GitHub Actions cron, which is free for a public
+repository, so no Cloud Scheduler job is needed. Reading the bucket from the same region is not
+charged. So the expected bill is nothing, and at list price with no free tier at all, five
+minutes a month is a few pence a year.
+
+### Doing it by hand, on any object store
+
+The bundled config implements `gs://` because that is what the hosted deployment uses. The drill is
+the same everywhere and is worth running by hand once, whatever you store backups in:
+
+```sh
+# Fetch the newest dump. Use whatever your store speaks; rclone speaks most of them.
+rclone copy "$SOTTO_BACKUP_BUCKET/$(rclone lsf "$SOTTO_BACKUP_BUCKET" | sort | tail -1)" .
+
+# Restore into a scratch database, never the live one.
+createdb restored
+pg_restore -d restored --no-owner --no-privileges <dump>
+
+# Check what came back.
+scripts/check-restore --database-url postgres://localhost/restored   # no password in the URL
+```
+
+Record the result in `deploy/rehearsals/` the way the existing entries do. A drill nobody writes
+down is one nobody can prove happened, which is how the nightly backup went uninstalled for two
+months with the runbook describing it the whole time.
+
 ## Status history
 
 A status page needs history, and history cannot be backfilled: every day nothing samples the
