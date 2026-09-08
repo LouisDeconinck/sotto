@@ -14,6 +14,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +105,29 @@ class BillingVerdict(unittest.TestCase):
 
     def test_no_billing_configured_is_a_choice_not_an_outage(self):
         self.assertEqual(probe.judge_billing(response(503)).state, probe.UNCONFIGURED)
+
+
+class Observation(unittest.TestCase):
+    def probe_for(self, judge, path="/x"):
+        return probe.Probe(id="t", name="T", description="", method="GET", path=path, judge=judge)
+
+    def test_a_transport_failure_is_recorded_as_the_component_being_gone(self):
+        # Nothing is listening on port 1, so this is a real connection refusal rather than a
+        # stubbed one, and it is the honest reading: no visitor could have used it either.
+        outcomes = probe.observe("http://127.0.0.1:1", [self.probe_for(probe.judge_web)])
+        self.assertEqual(outcomes["t"].state, probe.DOWN)
+        self.assertIn("URLError", outcomes["t"].detail)
+
+    def test_a_broken_verdict_raises_rather_than_reporting_an_outage(self):
+        # The failure this guards against is subtle and bad: a defect in our own code recorded
+        # as somebody else's downtime, published on a status page, with the job still green.
+        # Nothing would ever have pointed at the collector.
+        def broken(_response):
+            raise AttributeError("verdict bug")
+
+        with unittest.mock.patch.object(probe, "fetch", return_value=response(200)):
+            with self.assertRaises(AttributeError):
+                probe.observe("https://example.invalid", [self.probe_for(broken)])
 
 
 class Summary(unittest.TestCase):

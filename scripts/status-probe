@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.client
 import json
 import os
 import sys
@@ -203,20 +204,31 @@ def read(response) -> Response:
     headers = {k.lower(): v for k, v in response.headers.items()}
     try:
         body = response.read(64).decode("utf-8", "replace")
-    except Exception:  # pragma: no cover - a body that will not read is not a verdict
+    except TRANSPORT_FAILURES:  # a body that stops arriving is a transport fact, not a verdict
         body = ""
     return Response(status=response.status, headers=headers, body_prefix=body)
+
+
+# What a network can do to a request. `urllib.error.URLError` is an `OSError`, and a truncated
+# or malformed reply arrives as an `HTTPException`; anything outside these two is a defect in
+# this script rather than a fact about the deployment.
+TRANSPORT_FAILURES = (OSError, http.client.HTTPException)
 
 
 def observe(base_url: str, probes: list[Probe]) -> dict[str, Outcome]:
     outcomes = {}
     for probe in probes:
         try:
-            outcomes[probe.id] = probe.judge(fetch(base_url, probe))
-        except Exception as e:
+            response = fetch(base_url, probe)
+        except TRANSPORT_FAILURES as e:
             # A transport failure is indistinguishable from the component being gone, which
             # is the honest reading: nobody could have used it either.
             outcomes[probe.id] = Outcome(DOWN, f"{type(e).__name__}: {e}"[:200])
+            continue
+        # Deliberately outside the handler. A bug in a verdict is not an outage, and recording
+        # it as one would publish our own defect on a status page as somebody else's downtime
+        # while leaving this job green. Let it raise and turn the run red instead.
+        outcomes[probe.id] = probe.judge(response)
     return outcomes
 
 
