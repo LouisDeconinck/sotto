@@ -445,6 +445,15 @@ gcloud iam service-accounts add-iam-policy-binding \
   sotto-build-submitter@<project>.iam.gserviceaccount.com \
   --role roles/iam.workloadIdentityUser \
   --member "principalSet://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/attribute.repository/<owner>/<repo>"
+
+# And to upload the source it submits. `roles/cloudbuild.builds.editor` carries eleven
+# permissions and not one of them is storage, so without this the submit fails on the staging
+# bucket rather than on anything to do with backups. objectAdmin rather than objectCreator
+# because a creator that cannot list cannot upload either, which is the same trap the backup
+# writer hit.
+gcloud storage buckets add-iam-policy-binding gs://<project>_cloudbuild \
+  --member "serviceAccount:sotto-build-submitter@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectAdmin
 ```
 
 Then set the repository variables `GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT` and
