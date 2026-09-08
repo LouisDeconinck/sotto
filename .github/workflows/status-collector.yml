@@ -23,9 +23,15 @@ on:
 permissions: {}
 
 concurrency:
-  # Two collectors appending to the same branch would race on the push. Queue instead of
-  # cancelling: a cancelled run is a lost sample, and losing samples is the one thing this
-  # job must not do.
+  # Two collectors appending to the same branch would race on the push, so runs queue rather
+  # than overlap. Not cancelling the one in progress means the sample it is part way through
+  # still lands.
+  #
+  # This is a narrower guarantee than it looks, and worth stating rather than assuming: GitHub
+  # holds only one pending run per group, so if a third arrives while one is running and one
+  # is waiting, the waiting one is cancelled and its sample is lost. That needs a real backlog
+  # at this interval, and a gap in the record is a gap, not a wrong number, but nothing here
+  # makes it impossible.
   group: status-collector
   cancel-in-progress: false
 
