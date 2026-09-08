@@ -391,7 +391,10 @@ gcloud storage buckets add-iam-policy-binding gs://sotto-backups-prod \
   --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
   --role roles/storage.objectViewer
 
-# Cloud Build needs to be able to act as it, and to write its own logs.
+# A build running as this account writes its own logs, so without this it cannot start. The
+# separate grant that lets something *act as* this account is further down, with the schedule:
+# a human with project access already has it, which is why the manual submit below works before
+# that grant exists.
 gcloud projects add-iam-policy-binding <project> \
   --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
   --role roles/logging.logWriter
@@ -428,6 +431,11 @@ choice until you try it. It needs a GitHub App connection, which is a standing a
 over the repository, and nothing else in this project requires one. Scheduling from a workflow
 that already federates costs no new trust, and keeps the schedule in the repository next to the
 drill it runs.
+
+On another provider the shape is the same and only the nouns change: a scheduled container with
+read access to the backup store, running the three commands from **Doing it by hand** below. A
+scheduled task or a build service will do it; nothing here depends on Cloud Build beyond it
+being what this deployment already has.
 
 That workflow needs an identity that may **start** a build without being able to read a backup:
 
