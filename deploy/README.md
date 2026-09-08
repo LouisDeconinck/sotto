@@ -339,8 +339,13 @@ cannot tell you the bytes survived the trip to the bucket, and it cannot tell yo
 comes back is a database this code could run on. Only restoring one answers those.
 
 `deploy/restore-verification.yaml` does it monthly: fetch the newest object, restore it into a
-throwaway Postgres that dies with the build, and check what came back. Never onto the host,
-which by design cannot read what it wrote.
+throwaway Postgres that dies with the build, and check what came back.
+
+Where the dump goes is worth stating rather than leaving to inference. It is downloaded into the
+build's own workspace and restored into a container beside it, both inside your Cloud project,
+and both destroyed when the build ends. It never touches the production host, which by design
+cannot read what it wrote, and it never reaches a GitHub runner: the workflow that schedules
+this uploads only this repository's source, which is public.
 
 What it asserts, which is the rehearsal of 2026-08-31 written down:
 

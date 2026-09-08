@@ -18,7 +18,10 @@
 
 steps:
   # Cloud Build runs every step on the `cloudbuild` docker network, so a database started here
-  # is reachable as `postgres` by each step that follows. It dies with the build.
+  # is reachable as `postgres` by each step that follows. It dies with the build, as does the
+  # workspace the dump is downloaded into. Neither the production host nor a GitHub runner ever
+  # holds the file: the host by design cannot read what it wrote, and the runner that schedules
+  # this uploads only this repository's public source.
   - id: database
     name: gcr.io/cloud-builders/docker
     args:
