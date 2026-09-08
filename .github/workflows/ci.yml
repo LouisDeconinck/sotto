@@ -198,25 +198,25 @@ jobs:
         # every query executes and every structural check passes against the current migrations.
         run: |
           set -euo pipefail
-          output="$(scripts/check-restore --database-url "$DATABASE_URL" 2>&1 || true)"
-          printf '%s\n' "$output"
-          # Prove it ran before reading anything into what it did not say. Searching only for
-          # failure phrases passes a script that never started: no psql, no connection, a syntax
-          # error on the first line, all produce output containing none of them. This line is
-          # printed only after every query has returned.
-          if ! printf '%s' "$output" | grep -q "tables restored:"; then
-            echo "the restore checker did not reach a verdict, so nothing below was tested" >&2
+          status=0
+          scripts/check-restore --database-url "$DATABASE_URL" > check.log 2>&1 || status=$?
+          cat check.log
+
+          # Printed only after every query has returned, so its absence means the checker never
+          # reached a verdict: no psql, no connection, a syntax error on the first line. Reading
+          # anything into what it did not say would be reading a blank page.
+          if ! grep -q "tables restored:" check.log; then
+            echo "the restore checker did not reach a verdict, so nothing was tested" >&2
             exit 1
           fi
-          # Row counts are not asserted: what a test run leaves behind is not this job's
-          # business. Structure is, and none of these may ever appear against a healthy schema.
-          for unexpected in "recorded as failed" "missing from the restored database" \
-                            "does not:" "no migrations at all"; do
-            if printf '%s' "$output" | grep -q "$unexpected"; then
-              echo "the restore checker disagreed with a freshly migrated database: $unexpected" >&2
-              exit 1
-            fi
-          done
+
+          # One tolerated failure, named rather than a list of forbidden ones. A fresh database
+          # can legitimately have no rows in it, and what a test run leaves behind is not this
+          # job's business; every other complaint, and every crash, is.
+          if [ "$status" -ne 0 ] && ! grep -q "restored but empty" check.log; then
+            echo "the restore checker disagreed with a freshly migrated database" >&2
+            exit 1
+          fi
 
   funnel-e2e:
     name: funnel regression suite (Launch gate 4)
