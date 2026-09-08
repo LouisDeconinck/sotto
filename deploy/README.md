@@ -346,8 +346,13 @@ and appends what it saw to an orphan `status-history` branch, which shares no hi
   aggregation ever turns out to be wrong. A published uptime figure nobody can recheck is a
   figure nobody should have to take on trust.
 
+Both age out at the same ninety days, which is the point: the audit trail covers exactly the
+window the summary publishes, and nothing is kept that no longer backs a number anyone can see.
+If you want a longer record than you publish, the sample files are plain JSONL and copying them
+somewhere else before they age out is the whole of what that takes.
+
 Set the repository variable `SOTTO_PUBLIC_URL` to the deployment to watch. Without it the job
-skips rather than probing a default, so a fork cannot point it at somebody else's instance.
+skips rather than probing a default, so a fork cannot point it at somebody else's deployment.
 Set the secret `STATUS_HEARTBEAT_URL` too, from any external checker: the collector pings it
 after each round of samples is pushed, and the checker alerting when those pings stop is the
 only thing that can notice this job dying or running green while sampling nothing. Allow that
@@ -359,9 +364,13 @@ record that is meant to be permanent:
 
 - **Point it at the origin the deployment actually serves**, with the scheme it serves on. No
   probe follows redirects, so a `www` host or an `http` URL that the deployment folds onto its
-  canonical origin reads as every component being down, for as long as it is left that way. A
-  redirect is recorded with a detail saying so rather than a bare failure, but the tally still
-  counts it.
+  canonical origin would otherwise read as every component being down at once. A round where
+  every probe was redirected is treated as a wrong setting rather than an outage: nothing is
+  written and the run fails, which withholds the heartbeat and makes the mistake noticeable
+  instead of accruing invented downtime. A deployment that is genuinely gone refuses
+  connections rather than redirecting them, so a real outage is still recorded. A single
+  redirected component among working ones is recorded too, since only unanimity is
+  unambiguous.
 - **Wait until the deployment serves `/health/ready`**, which means version 0.7.0 or later.
   Before that the path falls through to the single-page app, and the API row records real
   downtime for a deployment that is working.
