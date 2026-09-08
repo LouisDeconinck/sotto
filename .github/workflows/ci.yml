@@ -290,7 +290,9 @@ jobs:
       - name: Install cargo-audit
         # Keep the JSON report parser/tests in sync when upgrading this version.
         run: cargo install cargo-audit --version 0.22.2 --locked
-      - name: Test cargo audit policy
+      - name: Repository script tests
+        # Discovers every test under scripts/tests, not only the audit policy ones, so a new
+        # script's tests are picked up here the day they are written.
         run: python3 -B -m unittest discover -s scripts/tests -v
       - name: Audit lockfile and verify dormant exceptions
         run: scripts/check-cargo-audit
