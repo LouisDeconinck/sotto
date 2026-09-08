@@ -85,7 +85,10 @@ jobs:
           # Runs in the foreground, so this job's success is the drill's success and its failure
           # is the drill's failure. The build's own log carries the verdict; nothing is repeated
           # here, because that log is private to the project and this one is not.
-          gcloud builds submit . \
+          # --no-source, so nothing is uploaded and no staging bucket is involved. The build
+          # fetches this exact commit from the public repository itself; see the first step of
+          # the config for why.
+          gcloud builds submit --no-source \
             --config deploy/restore-verification.yaml \
             --service-account "projects/${project}/serviceAccounts/${RESTORER}" \
-            --substitutions "_BACKUP_BUCKET=${BUCKET},_HEARTBEAT_URL=${HEARTBEAT_URL}"
+            --substitutions "^|^_REPOSITORY=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}|_REVISION=${GITHUB_SHA}|_BACKUP_BUCKET=${BUCKET}|_HEARTBEAT_URL=${HEARTBEAT_URL}"
