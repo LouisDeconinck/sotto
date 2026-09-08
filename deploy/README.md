@@ -331,6 +331,84 @@ rather than refuses is reported as unavailable rather than holding the request o
 apart from "the box is up and the database is not". Keep it pointed at `/health` for that
 distinction to mean anything.
 
+## Restore verification
+
+A backup nobody has restored is a hope. `backup.sh` validates each archive with
+`pg_restore --list` before upload, which proves the file is not truncated and nothing more. It
+cannot tell you the bytes survived the trip to the bucket, and it cannot tell you that what
+comes back is a database this code could run on. Only restoring one answers those.
+
+`.github/workflows/backup-restore.yml` does it monthly: fetch the newest object, restore it into
+a throwaway Postgres that dies with the runner, and check what came back. Never onto the host,
+which by design cannot read what it wrote.
+
+What it asserts, which is the rehearsal of 2026-08-31 written down:
+
+- `pg_restore` completes with no errors;
+- every migration the dump recorded is marked successful, and none is a version this checkout
+  does not carry. A deployment **behind** the branch passes: production is often a release or
+  two back, and failing every month in between would train everyone to ignore the job. A
+  deployment **ahead** fails, because a dump carrying schema this code does not know is not one
+  this code can be restored onto;
+- the organisation-deletion tables are present, named because deletion is the one operation
+  Sotto cannot undo from inside the product, so this backup is the only thing behind it;
+- the tables that must never be empty are not. A dump of the wrong database, or one taken after
+  a truncation, passes every structural check ever written and fails this one.
+
+Nothing the job prints is data. This repository is public, so its workflow logs are public, and
+the dump is production. Counts, table names and migration versions are safe to say out loud;
+`pg_restore`'s error log is withheld even on failure, because it can quote the SQL it choked on.
+
+### Configuration
+
+Restoring needs to **read** objects, which the daily freshness check deliberately cannot do, so
+it uses its own identity rather than widening that one:
+
+```sh
+gcloud iam service-accounts create sotto-backup-restorer \
+  --display-name "Reads backups for monthly restore verification"
+
+gcloud storage buckets add-iam-policy-binding gs://sotto-backups-prod \
+  --member "serviceAccount:sotto-backup-restorer@<project>.iam.gserviceaccount.com" \
+  --role roles/storage.objectViewer
+
+# Bound to a GitHub environment, not to the whole repository. This is the only identity in the
+# project that can read a backup, so a workflow that has not declared `environment:
+# backup-restore` cannot assume it, and the environment can additionally require approval.
+gcloud iam service-accounts add-iam-policy-binding \
+  sotto-backup-restorer@<project>.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/github/subject/repo:<owner>/<repo>:environment:backup-restore"
+```
+
+Create the `backup-restore` environment in the repository settings, then set the variable
+`GCP_RESTORE_SERVICE_ACCOUNT` and, optionally, the secret `RESTORE_HEARTBEAT_URL`. The job
+reuses `SOTTO_BACKUP_BUCKET` and `GCP_WORKLOAD_IDENTITY_PROVIDER` from the freshness check.
+
+Note that the provider's attribute condition remains the security boundary: without it, the
+provider trusts every GitHub Actions token in existence.
+
+### Doing it by hand, on any object store
+
+The workflow implements `gs://` because that is what the hosted deployment uses. The drill is
+the same everywhere and is worth running by hand once, whatever you store backups in:
+
+```sh
+# Fetch the newest dump. Use whatever your store speaks; rclone speaks most of them.
+rclone copy "$SOTTO_BACKUP_BUCKET/$(rclone lsf "$SOTTO_BACKUP_BUCKET" | sort | tail -1)" .
+
+# Restore into a scratch database, never the live one.
+createdb restored
+pg_restore -d restored --no-owner --no-privileges <dump>
+
+# Check what came back.
+scripts/check-restore --database-url postgres://localhost/restored
+```
+
+Record the result in `deploy/rehearsals/` the way the existing entries do. A drill nobody writes
+down is one nobody can prove happened, which is how the nightly backup went uninstalled for two
+months with the runbook describing it the whole time.
+
 ## Status history
 
 A status page needs history, and history cannot be backfilled: every day nothing samples the
