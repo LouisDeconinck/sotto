@@ -91,14 +91,18 @@ jobs:
           echo "sampled=true" >> "$GITHUB_OUTPUT"
 
       - name: Commit the samples
+        id: commit
         if: steps.sample.outputs.sampled == 'true'
         env:
           BRANCH: status-history
         run: |
           set -euo pipefail
           cd history
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
-            echo "nothing sampled"
+          if [ -z "$(git status --porcelain)" ]; then
+            # Not expected: the probe rewrites the summary every round, so a clean tree means
+            # it wrote nothing. Say so and leave `pushed` unset, which withholds the heartbeat
+            # below rather than confirming a round that never landed.
+            echo "the probe left nothing to commit" >&2
             exit 0
           fi
           git add -A
@@ -113,6 +117,7 @@ jobs:
           # what happens if it ever fails to.
           for attempt in 1 2 3; do
             if git push origin "HEAD:$BRANCH"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             git fetch origin "$BRANCH"
@@ -122,9 +127,9 @@ jobs:
           exit 1
 
       - name: Send the heartbeat
-        # Last, and only after a round of samples has actually been pushed. Sending it before
-        # the commit would confirm a round that then failed to persist, which is the shape of
-        # every heartbeat that quietly stops meaning anything.
+        # Last, and gated on the push having actually happened rather than merely on the step
+        # before it having run. Sending it earlier would confirm a round that never landed,
+        # which is the shape of every heartbeat that quietly stops meaning anything.
         #
         # Whichever external checker owns this URL alerts when the pings stop, which is the
         # only thing that can notice this job dying, being disabled, or running green for
@@ -134,7 +139,7 @@ jobs:
         # Its grace period has to allow for GitHub's queue rather than the cron: scheduled
         # runs here have arrived hours late, and a heartbeat monitor tuned to the interval
         # would page for lateness rather than for failure.
-        if: steps.sample.outputs.sampled == 'true'
+        if: steps.commit.outputs.pushed == 'true'
         env:
           HEARTBEAT_URL: ${{ secrets.STATUS_HEARTBEAT_URL }}
         run: |
