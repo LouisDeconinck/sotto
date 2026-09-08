@@ -69,6 +69,7 @@ jobs:
           fi
 
       - name: Sample
+        id: sample
         env:
           # The deployment to watch. Absent, the job skips rather than probing a default,
           # so a fork or a self-hoster cannot accidentally point this at someone else.
@@ -76,12 +77,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$BASE_URL" ]; then
+            echo "sampled=false" >> "$GITHUB_OUTPUT"
             echo "SOTTO_PUBLIC_URL is not set; nothing to sample. See deploy/README.md." >&2
             exit 0
           fi
           scripts/status-probe --base-url "$BASE_URL" --data-dir history
+          echo "sampled=true" >> "$GITHUB_OUTPUT"
 
       - name: Commit the samples
+        if: steps.sample.outputs.sampled == 'true'
         env:
           BRANCH: status-history
         run: |
@@ -110,3 +114,25 @@ jobs:
           done
           echo "could not push the samples after three attempts" >&2
           exit 1
+
+      - name: Send the heartbeat
+        # Last, and only after a round of samples has actually been pushed. Sending it before
+        # the commit would confirm a round that then failed to persist, which is the shape of
+        # every heartbeat that quietly stops meaning anything.
+        #
+        # Whichever external checker owns this URL alerts when the pings stop, which is the
+        # only thing that can notice this job dying, being disabled, or running green for
+        # weeks against an unset variable while sampling nothing at all. An alarm cannot
+        # report its own silence; something outside it has to miss the noise.
+        #
+        # Its grace period has to allow for GitHub's queue rather than the cron: scheduled
+        # runs here have arrived hours late, and a heartbeat monitor tuned to the interval
+        # would page for lateness rather than for failure.
+        if: steps.sample.outputs.sampled == 'true'
+        env:
+          HEARTBEAT_URL: ${{ secrets.STATUS_HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$HEARTBEAT_URL" ]; then
+            curl -fsS --retry 3 --max-time 30 "$HEARTBEAT_URL" > /dev/null
+          fi
