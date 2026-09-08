@@ -231,6 +231,30 @@ class Samples(unittest.TestCase):
         self.assertEqual(parsed[1]["detail"], "x")
 
 
+class Retention(unittest.TestCase):
+    def test_sample_files_age_out_with_the_summary(self):
+        old = (NOW.date() - dt.timedelta(days=probe.RETAINED_DAYS)).isoformat()
+        edge = (NOW.date() - dt.timedelta(days=probe.RETAINED_DAYS - 1)).isoformat()
+        names = [f"{old}.jsonl", f"{edge}.jsonl", f"{NOW.date().isoformat()}.jsonl"]
+        self.assertEqual(probe.expired_samples(names, NOW.date()), [f"{old}.jsonl"])
+
+    def test_nothing_it_did_not_write_is_deleted(self):
+        # This runs `rm` inside a directory on a branch it pushes. A file it does not
+        # recognise is somebody else's, and guessing wrong here destroys data.
+        names = ["README.md", "notes.txt", "2026-13-45.jsonl", "backup.jsonl.gz"]
+        self.assertEqual(probe.expired_samples(names, NOW.date()), [])
+
+    def test_pruning_leaves_the_current_day_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            outcomes = {"api": probe.Outcome(probe.OK)}
+            probe.write(d, probe.merge(probe.load(d), outcomes, NOW), probe.sample_lines(outcomes, NOW), NOW)
+            stale = Path(d) / "samples" / "2020-01-01.jsonl"
+            stale.write_text("{}\n")
+            probe.prune(d, NOW.date())
+            self.assertFalse(stale.exists())
+            self.assertTrue((Path(d) / "samples" / "2026-09-08.jsonl").exists())
+
+
 class Persistence(unittest.TestCase):
     def test_a_missing_summary_starts_empty_rather_than_failing(self):
         with tempfile.TemporaryDirectory() as d:

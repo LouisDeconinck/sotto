@@ -324,6 +324,36 @@ def sample_lines(outcomes: dict[str, Outcome], now: dt.datetime) -> list[str]:
     ]
 
 
+def expired_samples(names: list[str], today: dt.date) -> list[str]:
+    """Sample files for days the summary no longer keeps.
+
+    The summary trims to the horizon but the raw files did not, so they grew without limit
+    and the audit trail slowly outlived the thing it was meant to audit. Matching the two
+    keeps the promise the runbook makes about how far back the record goes.
+    """
+    horizon = (today - dt.timedelta(days=RETAINED_DAYS - 1)).isoformat()
+    expired = []
+    for name in names:
+        date, _, extension = name.partition(".")
+        if extension != "jsonl":
+            continue
+        try:
+            dt.date.fromisoformat(date)
+        except ValueError:
+            # Not one of ours. Leaving a stranger's file alone costs nothing; deleting one
+            # because it sat in the same directory could cost somebody their data.
+            continue
+        if date < horizon:
+            expired.append(name)
+    return expired
+
+
+def prune(data_dir: str, today: dt.date) -> None:
+    samples = os.path.join(data_dir, "samples")
+    for name in expired_samples(sorted(os.listdir(samples)), today):
+        os.remove(os.path.join(samples, name))
+
+
 def write(data_dir: str, summary: dict, lines: list[str], now: dt.datetime) -> None:
     os.makedirs(os.path.join(data_dir, "samples"), exist_ok=True)
     with open(os.path.join(data_dir, "summary.json"), "w", encoding="utf-8") as f:
@@ -333,6 +363,7 @@ def write(data_dir: str, summary: dict, lines: list[str], now: dt.datetime) -> N
     with open(path, "a", encoding="utf-8") as f:
         for line in lines:
             f.write(line + "\n")
+    prune(data_dir, now.date())
 
 
 def load(data_dir: str) -> dict:
