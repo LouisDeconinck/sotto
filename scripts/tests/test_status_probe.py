@@ -81,7 +81,8 @@ class WebVerdict(unittest.TestCase):
         self.assertEqual(probe.judge_web(lookalike).state, probe.DOWN)
 
     def test_a_200_that_is_not_a_page_is_not_the_app(self):
-        self.assertEqual(probe.judge_web(response(200, {"content-type": "text/plain"})).state, probe.DOWN)
+        plain = response(200, {"content-type": "text/plain"})
+        self.assertEqual(probe.judge_web(plain).state, probe.DOWN)
         self.assertEqual(probe.judge_web(response(502)).state, probe.DOWN)
 
 
@@ -251,7 +252,8 @@ class Summary(unittest.TestCase):
     def test_an_unconfigured_component_never_enters_the_tally(self):
         # Otherwise every self-hoster running without billing would watch their published
         # uptime fall for a feature they deliberately do not run.
-        summary = probe.merge(probe.empty_summary(), {"billing": probe.Outcome(probe.UNCONFIGURED)}, NOW)
+        unconfigured = {"billing": probe.Outcome(probe.UNCONFIGURED)}
+        summary = probe.merge(probe.empty_summary(), unconfigured, NOW)
         billing = next(c for c in summary["components"] if c["id"] == "billing")
         self.assertEqual(billing["days"], [])
         self.assertEqual(billing["state"], probe.UNCONFIGURED)
@@ -272,7 +274,8 @@ class Summary(unittest.TestCase):
             when = NOW - dt.timedelta(days=probe.RETAINED_DAYS + 4 - i)
             summary = probe.merge(summary, {"billing": probe.Outcome(probe.OK)}, when)
         for i in range(30):
-            summary = probe.merge(summary, {"billing": probe.Outcome(probe.UNCONFIGURED)}, NOW + dt.timedelta(days=i))
+            unconfigured = {"billing": probe.Outcome(probe.UNCONFIGURED)}
+            summary = probe.merge(summary, unconfigured, NOW + dt.timedelta(days=i))
 
         billing = next(c for c in summary["components"] if c["id"] == "billing")
         last = (NOW + dt.timedelta(days=29)).date()
@@ -300,7 +303,8 @@ class Samples(unittest.TestCase):
     def test_one_line_per_observation_carrying_its_own_timestamp(self):
         # The cadence of this job is whatever GitHub's scheduler decides on the day, so a
         # sample that did not carry its own time could only be placed by assuming one.
-        lines = probe.sample_lines({"api": probe.Outcome(probe.OK), "web": probe.Outcome(probe.DOWN, "x")}, NOW)
+        outcomes = {"api": probe.Outcome(probe.OK), "web": probe.Outcome(probe.DOWN, "x")}
+        lines = probe.sample_lines(outcomes, NOW)
         parsed = [json.loads(line) for line in lines]
         self.assertEqual([p["component"] for p in parsed], ["api", "web"])
         self.assertEqual(parsed[0]["at"], "2026-09-08T12:00:00Z")
@@ -323,7 +327,8 @@ class Retention(unittest.TestCase):
     def test_pruning_leaves_the_current_day_alone(self):
         with tempfile.TemporaryDirectory() as d:
             outcomes = {"api": probe.Outcome(probe.OK)}
-            probe.write(d, probe.merge(probe.load(d), outcomes, NOW), probe.sample_lines(outcomes, NOW), NOW)
+            summary = probe.merge(probe.load(d), outcomes, NOW)
+            probe.write(d, summary, probe.sample_lines(outcomes, NOW), NOW)
             stale = Path(d) / "samples" / "2020-01-01.jsonl"
             stale.write_text("{}\n")
             probe.prune(d, NOW.date())
@@ -340,7 +345,8 @@ class Persistence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for _ in range(2):
                 outcomes = {"api": probe.Outcome(probe.OK)}
-                probe.write(d, probe.merge(probe.load(d), outcomes, NOW), probe.sample_lines(outcomes, NOW), NOW)
+                summary = probe.merge(probe.load(d), outcomes, NOW)
+                probe.write(d, summary, probe.sample_lines(outcomes, NOW), NOW)
             api = next(c for c in probe.load(d)["components"] if c["id"] == "api")
             self.assertEqual(api["days"], [{"date": "2026-09-08", "ok": 2, "total": 2}])
             lines = (Path(d) / "samples" / "2026-09-08.jsonl").read_text().strip().split("\n")

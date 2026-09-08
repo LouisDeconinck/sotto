@@ -156,7 +156,8 @@ def judge_web(response: Response) -> Outcome:
 
 def judge_signin(response: Response) -> Outcome:
     location = header(response, "location")
-    if response.status in (302, 303, 307) and location.startswith("https://github.com/login/oauth/"):
+    started = location.startswith("https://github.com/login/oauth/")
+    if response.status in (302, 303, 307) and started:
         return Outcome(OK)
     if response.status == 503:
         return Outcome(UNCONFIGURED, "this deployment has no oauth credentials")
@@ -430,10 +431,12 @@ def main() -> int:
         # that follows it, which is what makes the mistake noticeable at all. A real outage
         # looks nothing like this, because a deployment that is gone refuses connections
         # rather than politely redirecting them.
-        print(f"every probe was misdirected; {args.base_url} is not the origin served", file=sys.stderr)
+        print(f"every probe was misdirected; {args.base_url} is not the origin served",
+              file=sys.stderr)
         return 1
 
-    write(args.data_dir, merge(load(args.data_dir), outcomes, now), sample_lines(outcomes, now), now)
+    summary = merge(load(args.data_dir), outcomes, now)
+    write(args.data_dir, summary, sample_lines(outcomes, now), now)
     # Exit zero even when a component is down. This job records what it saw; alerting is the
     # monitoring vendor's job, and a red workflow every time the site blips would train
     # everyone to ignore the one that means the collector itself is broken. The refusal above
