@@ -43,7 +43,19 @@ jobs:
           set -euo pipefail
           if [ -z "$PROVIDER" ] || [ -z "$SUBMITTER" ] || [ -z "$RESTORER" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "The restore drill is not configured; see deploy/README.md." >&2
+            # A warning rather than a failure, and rather than nothing. Failing would redden
+            # every fork and every deployment that has not done the cloud setup, which is not
+            # their bug. But a plain green tick on a job that did not run is how a drill stops
+            # happening without anyone noticing, which is the whole failure this exists to
+            # catch, so it says so where the run is actually looked at.
+            echo "::warning title=Restore drill skipped::Not configured, so no backup was restored this month. See deploy/README.md."
+            {
+              echo "### Restore drill skipped"
+              echo
+              echo "No backup was restored. Set \`GCP_BUILD_SUBMITTER_SERVICE_ACCOUNT\`,"
+              echo "\`GCP_RESTORE_SERVICE_ACCOUNT\` and \`GCP_WORKLOAD_IDENTITY_PROVIDER\`;"
+              echo "see \`deploy/README.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
