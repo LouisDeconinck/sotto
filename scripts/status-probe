@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Sample the public surface of a Sotto deployment and append the result to a history file.
+
+Usage: scripts/status-probe --base-url https://example.com --data-dir <dir>
+
+Writes two things under --data-dir. `summary.json` carries the current state of each
+component and a per-day tally, which is what a status page renders. `samples/<date>.jsonl`
+carries every individual observation, so the tallies can be recomputed if the aggregation
+here ever turns out to be wrong. A number nobody can recompute is a number nobody should
+publish, and this is a file whose whole purpose is to be believed.
+
+Every probe is unauthenticated and reads what any visitor could read. None of them proves
+a component is healthy for a signed-in user; they prove the component answers, which is the
+question a status page asks.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from typing import Callable
+
+SCHEMA = 1
+
+# How much history a page renders. Ninety days is the convention the hosted status pages
+# use, and it is the horizon this trims to; older days fall off the summary but stay in the
+# per-day sample files.
+RETAINED_DAYS = 90
+
+# Long enough to distinguish "slow" from "gone" without holding the job open. A component
+# that takes longer than this to answer is not serving anyone either.
+TIMEOUT_SECONDS = 15
+
+OK = "ok"
+DOWN = "down"
+UNCONFIGURED = "unconfigured"
+
+
+@dataclass(frozen=True)
+class Response:
+    """What a probe saw. Deliberately not the body: bodies can carry secrets, and no verdict
+    below needs more than a prefix of one."""
+
+    status: int
+    headers: dict[str, str]
+    body_prefix: str
+
+
+@dataclass(frozen=True)
+class Outcome:
+    state: str
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class Probe:
+    id: str
+    name: str
+    description: str
+    method: str
+    path: str
+    judge: Callable[[Response], Outcome]
+
+
+def header(response: Response, name: str) -> str:
+    return response.headers.get(name.lower(), "")
+
+
+def judge_api(response: Response) -> Outcome:
+    if response.status == 200 and response.body_prefix.strip() == "ok":
+        return Outcome(OK)
+    if response.status == 503:
+        # The readiness probe's own way of saying the database is unreachable. That is an
+        # outage, not a missing configuration, so it must not be excused as one.
+        return Outcome(DOWN, "readiness reported the database unreachable")
+    if header(response, "content-type").startswith("text/html"):
+        # The single page app answered instead of the server, which means the deployment's
+        # reverse proxy has no route for this path rather than that the API is down.
+        return Outcome(DOWN, "the web app answered instead of the API")
+    return Outcome(DOWN, f"expected 200 ok, got {response.status}")
+
+
+def judge_web(response: Response) -> Outcome:
+    if response.status == 200 and header(response, "content-type").startswith("text/html"):
+        return Outcome(OK)
+    return Outcome(DOWN, f"expected an html page, got {response.status}")
+
+
+def judge_signin(response: Response) -> Outcome:
+    location = header(response, "location")
+    if response.status in (302, 303, 307) and location.startswith("https://github.com/login/oauth/"):
+        return Outcome(OK)
+    if response.status == 503:
+        return Outcome(UNCONFIGURED, "this deployment has no oauth credentials")
+    return Outcome(DOWN, f"expected a redirect to github, got {response.status}")
+
+
+def judge_billing(response: Response) -> Outcome:
+    if response.status == 401:
+        return Outcome(OK)
+    if response.status == 503:
+        return Outcome(UNCONFIGURED, "this deployment has no billing configured")
+    return Outcome(DOWN, f"expected 401 for an unsigned webhook, got {response.status}")
+
+
+# The redirect_uri is a loopback address the server accepts but nothing listens on, and the
+# state is opaque. The request writes a short-lived login row, which the same endpoint clears
+# on its next call, so this probe exercises the write path rather than only a read.
+SIGNIN_QUERY = "?redirect_uri=http%3A%2F%2F127.0.0.1%3A1%2F&state=status-probe"
+
+PROBES: list[Probe] = [
+    Probe(
+        id="api",
+        name="API",
+        description="Serving requests and reaching its database",
+        method="GET",
+        path="/health/ready",
+        judge=judge_api,
+    ),
+    Probe(
+        id="web",
+        name="Web app",
+        description="The application shell loads",
+        method="GET",
+        path="/",
+        judge=judge_web,
+    ),
+    Probe(
+        id="signin",
+        name="Sign in",
+        description="The GitHub sign-in flow starts",
+        method="GET",
+        path="/auth/github/login" + SIGNIN_QUERY,
+        judge=judge_signin,
+    ),
+    Probe(
+        id="billing",
+        name="Billing",
+        description="Subscription webhooks are accepted and authenticated",
+        method="POST",
+        path="/billing/webhook",
+        judge=judge_billing,
+    ),
+]
+
+# Declared but not probed yet. The canary needs a throwaway organisation and a machine token
+# that do not exist, and shipping a probe that has never run once is the failure this whole
+# effort exists to prevent. It appears as a row so the page can say plainly that it is not
+# being watched, rather than implying by omission that everything is.
+UNPROBED = [
+    {
+        "id": "sync",
+        "name": "Secret sync",
+        "description": "A canary secret can be fetched and decrypted",
+        "state": UNCONFIGURED,
+        "detail": "no canary organisation is configured",
+    }
+]
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """The sign-in probe asserts the redirect itself, so following it would both lose the
+    evidence and send a request to github.com that nothing here needs to make."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def fetch(base_url: str, probe: Probe) -> Response:
+    request = urllib.request.Request(
+        base_url.rstrip("/") + probe.path,
+        method=probe.method,
+        data=b"{}" if probe.method == "POST" else None,
+        headers={"User-Agent": "sotto-status-probe"},
+    )
+    opener = urllib.request.build_opener(NoRedirects)
+    try:
+        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+            return read(response)
+    except urllib.error.HTTPError as e:
+        # Every non-2xx arrives here, and most of them are the expected answer: 401 from the
+        # webhook, 303 from sign-in, 503 from an unconfigured feature.
+        return read(e)
+
+
+def read(response) -> Response:
+    headers = {k.lower(): v for k, v in response.headers.items()}
+    try:
+        body = response.read(64).decode("utf-8", "replace")
+    except Exception:  # pragma: no cover - a body that will not read is not a verdict
+        body = ""
+    return Response(status=response.status, headers=headers, body_prefix=body)
+
+
+def observe(base_url: str, probes: list[Probe]) -> dict[str, Outcome]:
+    outcomes = {}
+    for probe in probes:
+        try:
+            outcomes[probe.id] = probe.judge(fetch(base_url, probe))
+        except Exception as e:
+            # A transport failure is indistinguishable from the component being gone, which
+            # is the honest reading: nobody could have used it either.
+            outcomes[probe.id] = Outcome(DOWN, f"{type(e).__name__}: {e}"[:200])
+    return outcomes
+
+
+def empty_summary() -> dict:
+    return {"schema": SCHEMA, "generated_at": None, "components": []}
+
+
+def merge(summary: dict, outcomes: dict[str, Outcome], now: dt.datetime) -> dict:
+    """Fold one round of observations into the running summary.
+
+    Only conclusive samples reach the daily tally. A component nobody has configured is not
+    having an outage, so counting it as one would quietly drag an instance's uptime figure
+    down for a feature it has chosen not to run.
+    """
+    day = now.date().isoformat()
+    existing = {c["id"]: c for c in summary.get("components", [])}
+    components = []
+
+    for probe in PROBES:
+        outcome = outcomes.get(probe.id)
+        component = existing.get(probe.id, {"id": probe.id, "days": []})
+        component["name"] = probe.name
+        component["description"] = probe.description
+        if outcome is None:
+            components.append(component)
+            continue
+        component["state"] = outcome.state
+        component["detail"] = outcome.detail
+        component["checked_at"] = now.isoformat().replace("+00:00", "Z")
+        if outcome.state in (OK, DOWN):
+            days = {d["date"]: d for d in component.get("days", [])}
+            tally = days.setdefault(day, {"date": day, "ok": 0, "total": 0})
+            tally["total"] += 1
+            tally["ok"] += 1 if outcome.state == OK else 0
+            component["days"] = trim(days, now.date())
+        components.append(component)
+
+    for declared in UNPROBED:
+        component = existing.get(declared["id"], {"days": []})
+        component.update(declared)
+        components.append(component)
+
+    summary["schema"] = SCHEMA
+    summary["generated_at"] = now.isoformat().replace("+00:00", "Z")
+    summary["components"] = components
+    return summary
+
+
+def trim(days: dict[str, dict], today: dt.date) -> list[dict]:
+    horizon = (today - dt.timedelta(days=RETAINED_DAYS - 1)).isoformat()
+    return sorted(
+        (d for date, d in days.items() if date >= horizon),
+        key=lambda d: d["date"],
+    )
+
+
+def sample_lines(outcomes: dict[str, Outcome], now: dt.datetime) -> list[str]:
+    at = now.isoformat().replace("+00:00", "Z")
+    return [
+        json.dumps(
+            {"at": at, "component": pid, "state": o.state, "detail": o.detail},
+            sort_keys=True,
+        )
+        for pid, o in sorted(outcomes.items())
+    ]
+
+
+def write(data_dir: str, summary: dict, lines: list[str], now: dt.datetime) -> None:
+    os.makedirs(os.path.join(data_dir, "samples"), exist_ok=True)
+    with open(os.path.join(data_dir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+        f.write("\n")
+    path = os.path.join(data_dir, "samples", f"{now.date().isoformat()}.jsonl")
+    with open(path, "a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+def load(data_dir: str) -> dict:
+    try:
+        with open(os.path.join(data_dir, "summary.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return empty_summary()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--data-dir", required=True)
+    args = parser.parse_args()
+
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    outcomes = observe(args.base_url, PROBES)
+    write(args.data_dir, merge(load(args.data_dir), outcomes, now), sample_lines(outcomes, now), now)
+
+    for pid, outcome in sorted(outcomes.items()):
+        print(f"{pid}: {outcome.state}" + (f" ({outcome.detail})" if outcome.detail else ""))
+    # Exit zero even when a component is down. This job records what it saw; alerting is the
+    # monitoring vendor's job, and a red workflow every time the site blips would train
+    # everyone to ignore the one that means the collector itself is broken.
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
