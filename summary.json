@@ -1,0 +1,74 @@
+{
+  "components": [
+    {
+      "checked_at": "2026-09-08T19:58:05Z",
+      "days": [
+        {
+          "date": "2026-09-08",
+          "ok": 1,
+          "total": 1
+        }
+      ],
+      "description": "Serving requests and reaching its database",
+      "detail": null,
+      "id": "api",
+      "name": "API",
+      "state": "ok"
+    },
+    {
+      "checked_at": "2026-09-08T19:58:05Z",
+      "days": [
+        {
+          "date": "2026-09-08",
+          "ok": 1,
+          "total": 1
+        }
+      ],
+      "description": "The application shell loads",
+      "detail": null,
+      "id": "web",
+      "name": "Web app",
+      "state": "ok"
+    },
+    {
+      "checked_at": "2026-09-08T19:58:05Z",
+      "days": [
+        {
+          "date": "2026-09-08",
+          "ok": 1,
+          "total": 1
+        }
+      ],
+      "description": "The GitHub sign-in flow starts",
+      "detail": null,
+      "id": "signin",
+      "name": "Sign in",
+      "state": "ok"
+    },
+    {
+      "checked_at": "2026-09-08T19:58:05Z",
+      "days": [
+        {
+          "date": "2026-09-08",
+          "ok": 1,
+          "total": 1
+        }
+      ],
+      "description": "Subscription webhooks are accepted and authenticated",
+      "detail": null,
+      "id": "billing",
+      "name": "Billing",
+      "state": "ok"
+    },
+    {
+      "days": [],
+      "description": "A canary secret can be fetched and decrypted",
+      "detail": "no canary organisation is configured",
+      "id": "sync",
+      "name": "Secret sync",
+      "state": "unconfigured"
+    }
+  ],
+  "generated_at": "2026-09-08T19:58:05Z",
+  "schema": 1
+}
