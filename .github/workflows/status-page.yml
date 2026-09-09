@@ -1,0 +1,98 @@
+name: Status page
+
+# Publishes status.getsotto.co.uk from what the collector recorded and what the incidents say.
+#
+# On GitHub Pages rather than beside the service, deliberately: a status page hosted on the
+# thing it reports on tells you nothing on the only day you need it. Nothing here touches the
+# deployment, and the page it produces has no scripts and no external assets, so it has no
+# failure domain of its own to speak of either.
+
+on:
+  # After the collector, so the page reflects the sample that just landed. A push trigger on
+  # the data branch would be the obvious choice and does not work: GitHub does not start
+  # workflows from pushes made with GITHUB_TOKEN, which is what the collector pushes with.
+  workflow_run:
+    workflows: ["Status collector"]
+    types: [completed]
+  # Design and copy changes, which come from main rather than from the data.
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build-status"
+      - ".github/workflows/status-page.yml"
+  # A backstop, in case a run of the collector is missed and takes the page's freshness with it.
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Pages accepts one deployment at a time. Cancelling an in-flight build is safe here in a way
+  # it is not for the collector: this page is derived, so a lost run costs nothing but staleness
+  # and the next run rebuilds it from the same source of truth.
+  group: status-page
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build the page
+    if: github.repository == 'getsotto/sotto'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read the incident issues. Nothing here writes.
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the recorded history
+        run: |
+          set -euo pipefail
+          # The data branch is orphaned, so this is a fetch rather than a checkout of a path.
+          if git fetch --depth 1 origin status-history 2>/dev/null; then
+            git show FETCH_HEAD:summary.json > summary.json
+          else
+            # Before the collector's first push there is no history. The page says so in its own
+            # words rather than the build failing, because "we have not measured anything yet"
+            # is a true and useful thing for a status page to say on its first day.
+            echo '{"schema": 1, "generated_at": null, "components": []}' > summary.json
+          fi
+
+      - name: Fetch the incidents
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Every issue carrying the incident label, open or closed, with its comments as the
+          # staged updates. Tolerate the label not existing: on a repository that has never had
+          # an incident nothing has created it, and that is the good case.
+          gh issue list --label incident --state all --limit 50 \
+            --json title,url,state,createdAt,labels,comments > incidents.json 2>/dev/null \
+            || echo '[]' > incidents.json
+
+      - name: Build
+        run: scripts/build-status --summary summary.json --incidents incidents.json --out site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
