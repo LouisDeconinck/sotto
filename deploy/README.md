@@ -331,6 +331,98 @@ rather than refuses is reported as unavailable rather than holding the request o
 apart from "the box is up and the database is not". Keep it pointed at `/health` for that
 distinction to mean anything.
 
+### The checks that watch the checks
+
+Everything else here runs on GitHub or in your cloud project. That is fine for doing the work and
+useless for noticing that the work stopped: a job that is no longer scheduled reports nothing, and
+nothing is exactly what a healthy job also reports. The external checker is the only layer that
+survives its own subject being gone, so it owns two jobs that nothing else can do. It watches the
+deployment, and it watches the watchers.
+
+Each scheduled job pings a URL on success. The checker alarms when the pings **stop**, which is
+the inversion that matters: a job that fails, a job that is disabled, a job whose credentials
+expired and a job somebody deleted all look identical from inside, and identical to silence from
+outside. Silence is the signal.
+
+Five monitors, whichever checker you use (a free UptimeRobot account covers all five, but nothing
+here depends on it):
+
+| Monitor          | Kind      | Target                                   | Grace  |
+| ---------------- | --------- | ---------------------------------------- | ------ |
+| API              | keyword   | `https://<SOTTO_DOMAIN>/health/ready`, `ok` | 5 min  |
+| Web app          | HTTP      | `https://<SOTTO_DOMAIN>/`                | 5 min  |
+| Backup freshness | heartbeat | `BACKUP_HEARTBEAT_URL`                   | 36 h   |
+| Status collector | heartbeat | `STATUS_HEARTBEAT_URL`                   | 12 h   |
+| Restore drill    | heartbeat | `RESTORE_HEARTBEAT_URL`                  | 40 days |
+
+**The grace periods are derived, not chosen, and the derivation is the point.** Scheduled
+workflows on GitHub are queued rather than guaranteed, and on this deployment they arrive hours
+after their cron. Set a heartbeat tighter than the observed lateness and it pages you for a queue
+you do not control, which is how a pager gets ignored, and an ignored pager is worse than none.
+
+- **Backup freshness** asks for 09:43 daily and has arrived 4.1, 4.2 and 5.2 hours late on three
+  consecutive days. Consecutive pings can therefore be 24 h plus that lateness apart, close to
+  30 h, so the grace has to clear it. 36 h is the first comfortable number above.
+- **The status collector** asks for every ten minutes and manages about eight runs a day, with
+  gaps between runs of up to 4.6 h. 12 h leaves headroom without waiting a full day to tell you
+  it has died.
+- **The restore drill** runs monthly, so anything over 31 days plus lateness works.
+
+Re-measure these if the schedules change. The numbers above are what this deployment actually
+observed, not what its crons request, and the difference between those two is the whole reason
+this section exists.
+
+### What each alarm means
+
+- **API or web app down**: users are affected now. The status page will show it at its next
+  sample, which is slower than this alert; the alert is the one to act on.
+- **Backup heartbeat stopped**: nobody is checking that backups arrive. The backups themselves may
+  be fine. Run the workflow by hand to find out which.
+- **Collector heartbeat stopped**: the status page is going stale and will keep publishing its
+  last good data without saying so.
+- **Restore heartbeat stopped**: the monthly drill is not running, which means the backups are
+  once again unverified, which is the state this whole section was built to leave.
+
+### Setting it up
+
+1. Create the account and the first two monitors. The web app one is a plain HTTP check; the API
+   one must be a **keyword** check matching `ok`, and the difference is not cosmetic. A plain HTTP
+   check passes on any `200`, including the single-page app answering because the deployment has
+   no route for `/health/ready`, which is a real state this deployment has been in. The keyword is
+   what tells the readiness endpoint apart from the page that replaced it.
+
+   Confirm alerts go somewhere you will actually see: an email address you read, or the checker's
+   mobile app. Avoid SMS or voice if the provider charges for them separately, since that is the
+   one way this arrangement costs money.
+2. Create the three heartbeat monitors and copy their ping URLs.
+3. Set them as repository secrets, which is where the workflows read them from:
+
+```sh
+gh secret set BACKUP_HEARTBEAT_URL  --body '<url>'
+gh secret set STATUS_HEARTBEAT_URL  --body '<url>'
+gh secret set RESTORE_HEARTBEAT_URL --body '<url>'
+```
+
+4. **Prove each one arrives**, rather than assuming. Dispatch each workflow and watch its monitor
+   turn green:
+
+```sh
+gh workflow run backup-freshness.yml
+gh workflow run status-collector.yml
+gh workflow run backup-restore.yml
+```
+
+A heartbeat nobody has seen arrive is indistinguishable from one that never will, and it is
+supposed to be the thing that catches everything else, so it is the worst place in this system to
+take on trust. Until each URL is set, the workflows say on their own logs that nothing is watching
+them, which is honest and no substitute.
+
+**In a fork, change the repository guards before doing this.** All three workflows carry
+`if: github.repository == 'getsotto/sotto'`, so a dispatch in a fork succeeds, skips the job and
+sends nothing. The run goes green and the heartbeat never arrives, which reads exactly like a
+broken heartbeat and is not one. Point each guard at your own repository, or drop the line; it is
+there so a fork does not start probing somebody else's deployment merely by existing.
+
 ## Restore verification
 
 A backup nobody has restored is a hope. `backup.sh` validates each archive with
