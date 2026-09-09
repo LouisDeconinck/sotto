@@ -67,6 +67,25 @@ function sriPlugin(): Plugin {
   };
 }
 
+/**
+ * The footer's status link, for the snapshot, matching what `<Landing>` renders for the same
+ * configuration.
+ *
+ * It has to be here as well as in the component, and the reason is the contract below rather
+ * than the feature: with the variable set, a React footer carrying the link and a snapshot
+ * without it show crawlers different copy from users, which is the cloaking that contract
+ * forbids. Absent the variable both render nothing and agree, which is exactly why leaving this
+ * out looked fine.
+ */
+function statusLink(): string {
+  const url = process.env.VITE_STATUS_URL?.trim();
+  if (!url) {
+    return "";
+  }
+  const escaped = url.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return `<a href="${escaped}">Status</a>`;
+}
+
 // Pre-rendered SEO snapshot of the landing page (`/`). The source index.html ships an
 // otherwise empty `<div id="root">`, which leaves crawlers and no-JS visitors with nothing.
 // This plugin inlines a static snapshot of `src/Landing.tsx` into that div at build time;
@@ -163,7 +182,7 @@ sotto import .env            # optional: pull in an existing file, still encrypt
 sotto run -- npm start       # inject secrets into any command
 sotto login &amp;&amp; sotto push    # optional: sync ciphertext via getsotto.co.uk
 sotto share DATABASE_URL     # one-time link for a single secret</code></pre><p>Sotto works fully offline until you <code>sotto login</code>. Sync is a feature, not a requirement. The web vault at this address decrypts in your browser, with keys that never leave your devices.</p></section>
-<footer><nav aria-label="Footer"><a href="https://github.com/getsotto/sotto">GitHub</a><a href="#open-source">Contribute</a><a href="https://github.com/getsotto/sotto/releases">Releases</a><a href="https://github.com/getsotto/sotto/blob/main/THREAT-MODEL.md">Threat model</a><a href="https://github.com/getsotto/sotto/blob/main/SECURITY.md">Security policy</a><a href="https://github.com/getsotto/sotto/blob/main/deploy/README.md">Run your own</a><a href="/app">Log in</a></nav><p class="muted">Sotto takes its name from <em>sotto voce</em>: in a low voice, in confidence. Apache-2.0.</p></footer>
+<footer><nav aria-label="Footer"><a href="https://github.com/getsotto/sotto">GitHub</a><a href="#open-source">Contribute</a><a href="https://github.com/getsotto/sotto/releases">Releases</a><a href="https://github.com/getsotto/sotto/blob/main/THREAT-MODEL.md">Threat model</a><a href="https://github.com/getsotto/sotto/blob/main/SECURITY.md">Security policy</a><a href="https://github.com/getsotto/sotto/blob/main/deploy/README.md">Run your own</a>${statusLink()}<a href="/app">Log in</a></nav><p class="muted">Sotto takes its name from <em>sotto voce</em>: in a low voice, in confidence. Apache-2.0.</p></footer>
 </main>`;
 
 // Tolerates reformatting of the root div (whitespace, extra attributes) but still fails
