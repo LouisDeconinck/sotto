@@ -26,7 +26,7 @@ test("an unreachable server says so, rather than showing the browser's wording",
   await page.goto("/app");
 
   await expect(page.getByText(/could not reach the server/i)).toBeVisible();
-  await expect(page.getByText(/your secrets are safe/i)).toBeVisible();
+  await expect(page.getByText(/says nothing about your data/i)).toBeVisible();
   await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
 });
 

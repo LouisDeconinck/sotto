@@ -18,12 +18,18 @@ const CREDS: RequestInit = { credentials: "include" };
  * which reads like the data failed rather than the connection, and someone looking at it has no
  * way to tell whether the service is down or their vault is broken. Only one of those is
  * frightening, and it is not the one that is happening.
+ *
+ * The reassurance is about the design, not about their machine. An earlier wording promised
+ * secrets were "still encrypted on your device", which is a claim about a local copy that need
+ * not exist: this fires on a fresh browser before anything has been downloaded. What is always
+ * true is that the server never held anything readable, so that is what it says.
  */
 export class ServerUnreachableError extends Error {
   constructor(cause: unknown) {
     super(
-      "Could not reach the server. Your secrets are safe and still encrypted on your device; " +
-        "this is a connection problem, not a problem with your data.",
+      "Could not reach the server. This is a connection problem and says nothing about your " +
+        "data: Sotto encrypts secrets before they leave your device, so nothing readable is " +
+        "stored anywhere else.",
     );
     this.name = "ServerUnreachableError";
     this.cause = cause;
