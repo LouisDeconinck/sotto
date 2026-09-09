@@ -67,17 +67,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          FETCH_LIMIT: "200"
         run: |
           set -euo pipefail
           # Every issue carrying the incident label, open or closed, with its comments as the
           # staged updates. Tolerate the label not existing: on a repository that has never had
           # an incident nothing has created it, and that is the good case.
-          gh issue list --label incident --state all --limit 50 \
+          #
+          # `gh` pages through the API up to this limit, so the number is the only lever there
+          # is. It is set far above any plausible ninety day incident count, and the builder is
+          # told what was asked for so a full page can be reported as incomplete rather than
+          # quietly truncated.
+          gh issue list --label incident --state all --limit "$FETCH_LIMIT" \
             --json title,url,state,createdAt,labels,comments > incidents.json 2>/dev/null \
             || echo '[]' > incidents.json
 
       - name: Build
-        run: scripts/build-status --summary summary.json --incidents incidents.json --out site
+        run: |
+          scripts/build-status --summary summary.json --incidents incidents.json \
+            --fetch-limit 200 --out site
 
       - uses: actions/upload-pages-artifact@v3
         with:

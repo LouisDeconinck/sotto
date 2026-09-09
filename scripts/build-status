@@ -91,22 +91,29 @@ def opened_at(item: dict) -> str:
     return item.get("createdAt") or item.get("created_at") or ""
 
 
-def parse_incidents(issues: list[dict]) -> list[dict]:
+def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
     """GitHub issues as incidents, newest first.
 
     Chosen because at three in the morning, on a phone, opening an issue and adding comments is
     realistic and committing files is not. The authoring path has to be the easiest available or
     the log stops being written exactly when it matters.
+
+    Scoped to the same window as the bars, because that is what the rest of the page is about,
+    with one exception that matters more than the rule: an incident still open is shown however
+    old it is. Ageing out an ongoing outage would be the single worst thing this page could do.
     """
+    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
     incidents = []
     for issue in issues:
+        closed = issue.get("state") == "closed"
+        if closed and opened_at(issue)[:10] < horizon:
+            continue
         labels = [l["name"] for l in issue.get("labels", [])]
         # `resolved` is deliberately not readable from a label. Closing the issue is what
         # resolves an incident, so an open issue wearing a stale `resolved` label would
         # otherwise be published as over while it was still happening.
         stage = next((s for s in ("monitoring", "identified", "investigating") if s in labels),
                      None)
-        closed = issue.get("state") == "closed"
         updates = sorted(issue.get("comments", []), key=opened_at)
         incidents.append({
             "title": issue.get("title", "Untitled incident"),
@@ -125,7 +132,7 @@ def parse_incidents(issues: list[dict]) -> list[dict]:
     return incidents
 
 
-def build(summary: dict, issues: list[dict], today: dt.date) -> dict:
+def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = False) -> dict:
     components = summary.get("components", [])
     banner, tone = overall(components)
     rows = []
@@ -145,7 +152,8 @@ def build(summary: dict, issues: list[dict], today: dt.date) -> dict:
         "tone": tone,
         "generated_at": summary.get("generated_at"),
         "rows": rows,
-        "incidents": parse_incidents(issues),
+        "incidents": parse_incidents(issues, today),
+        "truncated": truncated,
         "span": SPAN_DAYS,
     }
 
@@ -279,8 +287,14 @@ def render(model: dict, now: dt.datetime) -> str:
     if model["incidents"]:
         incidents = "".join(render_incident(i) for i in model["incidents"])
     else:
-        incidents = ('      <p class="desc">No incidents recorded. This page lists every one, '
-                     'including the ones that were nobody else\'s fault.</p>\n')
+        incidents = ('      <p class="desc">No incidents in the last 90 days. Anything still '
+                     'open is listed however old it is.</p>\n')
+    if model.get("truncated"):
+        # Only reachable if there are more incidents in the window than the fetch asked for.
+        # Saying so beats a list that is quietly short: this page is worth exactly as much as
+        # its worst unstated omission.
+        incidents += ('      <p class="desc">More incidents matched than this page fetched, so '
+                      'the list above is incomplete.</p>\n')
 
     cadences = [r["cadence"] for r in model["rows"] if r["cadence"]]
     if cadences:
@@ -333,6 +347,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--incidents")
+    parser.add_argument("--fetch-limit", type=int, default=0,
+                        help="how many incidents the caller asked for, so a full page can be "
+                             "reported as possibly incomplete rather than silently short")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -344,7 +361,8 @@ def main() -> int:
             issues = json.load(f)
 
     now = dt.datetime.now(dt.timezone.utc)
-    page = render(build(summary, issues, now.date()), now)
+    truncated = bool(args.fetch_limit) and len(issues) >= args.fetch_limit
+    page = render(build(summary, issues, now.date(), truncated), now)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:
         f.write(page)

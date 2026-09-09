@@ -93,28 +93,21 @@ class Incidents(unittest.TestCase):
     def test_the_stage_comes_from_the_labels(self):
         issue = {"title": "Sync is slow", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [{"name": "incident"}, {"name": "identified"}], "comments": []}
-        self.assertEqual(page.parse_incidents([issue])[0]["stage"], "identified")
+        self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "identified")
 
     def test_closing_the_issue_resolves_it_whatever_the_labels_say(self):
         # Otherwise an incident closed without tidying its labels would sit on the page
         # claiming to be under investigation for ever.
         issue = {"title": "Outage", "state": "closed", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [{"name": "investigating"}], "comments": []}
-        self.assertEqual(page.parse_incidents([issue])[0]["stage"], "resolved")
-
-    def test_a_resolved_label_does_not_resolve_an_open_incident(self):
-        # Closing the issue is what resolves an incident. Reading it from a label would let a
-        # stale one publish an outage as over while it was still happening.
-        issue = {"title": "Ongoing", "state": "open", "createdAt": "2026-09-08T10:00:00Z",
-                 "labels": [{"name": "resolved"}], "comments": []}
-        self.assertEqual(page.parse_incidents([issue])[0]["stage"], "investigating")
+        self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "resolved")
 
     def test_comments_become_the_updates_in_order(self):
         issue = {"title": "Outage", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [], "comments": [
                      {"createdAt": "2026-09-01T10:30:00Z", "body": "Looking into it"},
                      {"createdAt": "2026-09-01T11:00:00Z", "body": "Fixed"}]}
-        updates = page.parse_incidents([issue])[0]["updates"]
+        updates = page.parse_incidents([issue], TODAY)[0]["updates"]
         self.assertEqual([u["body"] for u in updates], ["Looking into it", "Fixed"])
         self.assertEqual(updates[0]["at"], "2026-09-01 10:30")
 
@@ -127,7 +120,7 @@ class Incidents(unittest.TestCase):
         issues = [issue("Morning", "2026-09-08T09:00:00Z"),
                   issue("Evening", "2026-09-08T21:00:00Z"),
                   issue("Yesterday", "2026-09-07T12:00:00Z")]
-        self.assertEqual([i["title"] for i in page.parse_incidents(issues)],
+        self.assertEqual([i["title"] for i in page.parse_incidents(issues, TODAY)],
                          ["Evening", "Morning", "Yesterday"])
 
     def test_updates_are_ordered_however_the_api_returned_them(self):
@@ -135,8 +128,26 @@ class Incidents(unittest.TestCase):
                  "labels": [], "comments": [
                      {"createdAt": "2026-09-01T12:00:00Z", "body": "Resolved"},
                      {"createdAt": "2026-09-01T10:30:00Z", "body": "Looking into it"}]}
-        updates = page.parse_incidents([issue])[0]["updates"]
+        updates = page.parse_incidents([issue], TODAY)[0]["updates"]
         self.assertEqual([u["body"] for u in updates], ["Looking into it", "Resolved"])
+
+    def test_a_resolved_label_does_not_resolve_an_open_incident(self):
+        # Closing the issue is what resolves an incident. Reading it from a label would let a
+        # stale one publish an outage as over while it was still happening.
+        issue = {"title": "Ongoing", "state": "open", "createdAt": "2026-09-08T10:00:00Z",
+                 "labels": [{"name": "resolved"}], "comments": []}
+        self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "investigating")
+
+    def test_old_closed_incidents_age_out_but_open_ones_never_do(self):
+        # The bars cover ninety days, so the log does too. The exception is the one that
+        # matters: ageing out an incident that is still happening would be the worst thing
+        # this page could do.
+        stale = {"title": "Long resolved", "state": "closed", "labels": [], "comments": [],
+                 "createdAt": "2025-01-01T00:00:00Z"}
+        ancient_open = {"title": "Still open", "state": "open", "labels": [], "comments": [],
+                        "createdAt": "2025-01-01T00:00:00Z"}
+        titles = [i["title"] for i in page.parse_incidents([stale, ancient_open], TODAY)]
+        self.assertEqual(titles, ["Still open"])
 
 
 class Rendering(unittest.TestCase):
@@ -160,6 +171,15 @@ class Rendering(unittest.TestCase):
         out = page.render(model, dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc))
         self.assertNotIn("<img src=x", out)
         self.assertIn("&lt;img src=x", out)
+
+    def test_a_full_fetch_is_reported_as_possibly_incomplete(self):
+        # A short list that does not say it is short is the one failure a page about honesty
+        # cannot afford.
+        model = page.build(self.summary(), [], TODAY, truncated=True)
+        out = page.render(model, dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc))
+        self.assertIn("the list above is incomplete", out)
+        self.assertNotIn("incomplete", page.render(page.build(self.summary(), [], TODAY),
+                                                   dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc)))
 
     def test_it_says_so_when_nothing_has_been_observed(self):
         model = page.build({"generated_at": "x", "components": [component("unconfigured")]},
