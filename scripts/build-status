@@ -193,11 +193,16 @@ def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = F
 # The light palette is lifted from web/src/styles/tokens/colors.css, not re-picked, so the page
 # cannot drift from the app.
 #
-# The dark one is a borrow rather than a lift, and worth saying so: there is no dark page
-# palette in the tokens, only the `--term-*` set the app uses for its terminal, and these are
-# those. It is a defensible borrow, since that set is the one place the design system has
-# already decided what Sotto looks like on a dark ground. The proper fix is a dark page palette
-# in the tokens, at which point this block should follow it rather than the terminal.
+# The dark one is mostly a borrow and partly a pick, which is worth being exact about because
+# "these are the terminal tokens" is true of six of the nine and no more. The grounds, inks and
+# two signal colours are `--term-bg`, `--term-chrome`, `--term-fg`, `--term-dim`, `--term-ok`
+# and `--term-error` verbatim. The secondary ink, the hairline and the link colour are chosen
+# here: nothing in colors.css covers them on a dark ground, the nearest match for the first
+# living only inside the `[data-no-color]` monochrome override, which is a different question
+# being asked.
+#
+# So there is no dark page palette in the tokens, and this block is the closest thing to one.
+# The proper fix is to put it there and have both this page and the app follow it.
 STYLE = """
 :root {
   --paper: #fbfaf8; --paper-sunk: #f4f2ed;
@@ -250,6 +255,7 @@ a { color: var(--link); }
                color: var(--ink-3); }
 footer { margin-top: 4rem; color: var(--ink-3); font-size: 0.8125rem; }
 @media (prefers-color-scheme: dark) {
+  /* --ink-2, --hairline and --link are chosen here; the rest are --term-* verbatim. */
   :root { --paper: #16150f; --paper-sunk: #201e17; --ink: #d9d4c6; --ink-2: #b8b3a4;
           --ink-3: #857f6d; --hairline: #2e2b22; --link: #9db6e0;
           --ok: #86b57e; --alert: #e0705f; }
