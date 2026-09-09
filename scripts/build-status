@@ -147,6 +147,26 @@ def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -
     return incidents
 
 
+def possibly_truncated(issues: list[dict], fetch_limit: int, today: dt.date,
+                       span: int = SPAN_DAYS) -> bool:
+    """Whether the fetch could have cut an incident the page would otherwise show.
+
+    Two ways to get this wrong, and the first version managed both. Warning whenever the fetch
+    came back full cries wolf on a list that is merely exactly the limit long. And judging it
+    before the window filter warns about incidents that were never going to be displayed, so a
+    repository with a long history would carry the notice for ever on a complete page.
+
+    What actually matters is whether anything was cut from inside the window. The API returns
+    newest first, so a full fetch loses the oldest; if the oldest one that survived is still
+    inside the window, older in-window incidents may have gone with it.
+    """
+    if not fetch_limit or len(issues) < fetch_limit:
+        return False
+    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
+    oldest = min((opened_at(i)[:10] for i in issues if opened_at(i)), default="")
+    return bool(oldest) and oldest >= horizon
+
+
 def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = False) -> dict:
     components = summary.get("components", [])
     banner, tone = overall(components)
@@ -378,7 +398,7 @@ def main() -> int:
             issues = json.load(f)
 
     now = dt.datetime.now(dt.timezone.utc)
-    truncated = bool(args.fetch_limit) and len(issues) >= args.fetch_limit
+    truncated = possibly_truncated(issues, args.fetch_limit, now.date())
     page = render(build(summary, issues, now.date(), truncated), now)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:
