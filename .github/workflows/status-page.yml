@@ -1,0 +1,144 @@
+name: Status page
+
+# Publishes status.getsotto.co.uk from what the collector recorded and what the incidents say.
+#
+# On GitHub Pages rather than beside the service, deliberately: a status page hosted on the
+# thing it reports on tells you nothing on the only day you need it. Nothing here touches the
+# deployment, and the page it produces has no scripts and no external assets, so it has no
+# failure domain of its own to speak of either.
+
+on:
+  # After the collector, so the page reflects the sample that just landed. A push trigger on
+  # the data branch would be the obvious choice and does not work: GitHub does not start
+  # workflows from pushes made with GITHUB_TOKEN, which is what the collector pushes with.
+  workflow_run:
+    workflows: ["Status collector"]
+    types: [completed]
+  # An incident being opened, updated, staged or resolved. Without this the page waits for a
+  # collector run or the six hourly rebuild, so the moment somebody most needs the log
+  # published is the moment it is hours stale. Comments included: a staged update nobody can
+  # read is not an update.
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+  # Design and copy changes, which come from main rather than from the data.
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build-status"
+      - ".github/workflows/status-page.yml"
+  # Not a backstop against the collector, which would be an odd thing to build on the same
+  # queue that misses collector runs. The window itself moves: the bars are ninety days back
+  # from today, so a page nobody rebuilds keeps showing yesterday's ninety days and quietly
+  # ages. This keeps the frame current even when no new sample has arrived.
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Pages accepts one deployment at a time. Cancelling an in-flight build is safe here in a way
+  # it is not for the collector: this page is derived, so a lost run costs nothing but staleness
+  # and the next run rebuilds it from the same source of truth.
+  group: status-page
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build the page
+    # Guarded to the canonical repository, and for issue events to incidents only: every issue
+    # and every pull request comment reaches this workflow otherwise, and rebuilding the page
+    # for a code review is a waste of everyone's minutes.
+    if: >-
+      github.repository == 'getsotto/sotto' &&
+      (!contains(fromJSON('["issues", "issue_comment"]'), github.event_name) ||
+       contains(github.event.issue.labels.*.name, 'incident'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read the incident issues. Nothing here writes.
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the recorded history
+        run: |
+          set -euo pipefail
+          # The data branch is orphaned, so this is a fetch rather than a checkout of a path.
+          if git fetch --depth 1 origin status-history 2>/dev/null; then
+            git show FETCH_HEAD:summary.json > summary.json
+          else
+            # Before the collector's first push there is no history. The page says so in its own
+            # words rather than the build failing, because "we have not measured anything yet"
+            # is a true and useful thing for a status page to say on its first day.
+            echo '{"schema": 1, "generated_at": null, "components": []}' > summary.json
+          fi
+
+      - name: Fetch the incidents
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INCIDENT_BUDGET: "200"
+        run: |
+          set -euo pipefail
+          # Every issue carrying the incident label, open or closed, with its comments as the
+          # staged updates. Tolerate the label not existing: on a repository that has never had
+          # an incident nothing has created it, and that is the good case.
+          #
+          # `gh` pages through the API up to this limit, so the number is the only lever there
+          # is. Fetch one more than the budget the builder is told about: a list of exactly the
+          # budget and a list that overflowed are otherwise indistinguishable, and the page
+          # would either cry wolf on a complete list or stay quiet on a cut one.
+          # A failure here must not become "no incidents". That is the one sentence on this
+          # page nobody should ever read without it being true, and swallowing an API error
+          # into an empty list publishes it during exactly the outage that caused the error.
+          # Say the log is unavailable instead, and let the components still publish.
+          if gh issue list --label incident --state all --limit "$(( INCIDENT_BUDGET + 1 ))" \
+               --json title,url,state,createdAt,closedAt,labels,comments > incidents.json; then
+            :
+          elif ! gh label list --limit 200 --json name --jq '.[].name' | grep -qx incident; then
+            # No such label, which on a deployment that has never had an incident is the good
+            # case rather than an error.
+            echo '[]' > incidents.json
+          else
+            echo "could not read the incident log" >&2
+            rm -f incidents.json
+          fi
+
+      - name: Build
+        env:
+          INCIDENT_BUDGET: "200"
+        run: |
+          set -euo pipefail
+          # No incidents file means the fetch failed, which the page reports rather than
+          # rendering as an empty log.
+          if [ -f incidents.json ]; then
+            scripts/build-status --summary summary.json --incidents incidents.json \
+              --fetch-limit "$INCIDENT_BUDGET" --out site
+          else
+            scripts/build-status --summary summary.json --incidents-unavailable --out site
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

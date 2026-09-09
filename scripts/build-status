@@ -1,0 +1,461 @@
+#!/usr/bin/env python3
+"""Render the status page from what the collector recorded and what the incidents say.
+
+Usage: scripts/build-status --summary <summary.json> --incidents <issues.json> --out <dir>
+
+Reads files rather than calling anything, so the shaping below can be tested without a network
+and so the page can be rebuilt from an archived pair of inputs to see what it said on a given
+day. The workflow does the fetching.
+
+The output is one self-contained file. No scripts, no external assets, no fonts to fail to
+load: a status page whose own availability depends on a CDN is a joke told at its own expense,
+and Sordino asks that everything degrade to legible text anyway.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import html
+import json
+import os
+import sys
+
+# The window the collector retains, and so the most the page can show.
+SPAN_DAYS = 90
+
+OK, DOWN, UNCONFIGURED = "ok", "down", "unconfigured"
+
+# What the banner says, worst case first. Only probed components vote: a deployment that has
+# chosen not to run billing is not having a billing outage.
+OPERATIONAL = ("All systems operational", "ok")
+PARTIAL = ("Some systems are down", "down")
+MAJOR = ("Major outage", "down")
+UNKNOWN = ("Status unknown", "unknown")
+
+
+def overall(components: list[dict]) -> tuple[str, str]:
+    measured = [c for c in components if c.get("state") in (OK, DOWN)]
+    if not measured:
+        # Nothing has been observed at all, which is not the same as everything being fine and
+        # must never be reported as it.
+        return UNKNOWN
+    down = [c for c in measured if c["state"] == DOWN]
+    if not down:
+        return OPERATIONAL
+    return MAJOR if len(down) == len(measured) else PARTIAL
+
+
+def within_window(days: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
+    """The days the page can actually show.
+
+    Everything derived from the history has to agree on this. The collector trims against its
+    own clock, so a page built later inherits days that have since fallen out of its window;
+    left alone, the bars drop them and the percentage keeps counting them, and a component with
+    one green bar reports nine per cent. Whatever a reader can see has to be what the number
+    was made from.
+    """
+    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
+    return [d for d in days if d["date"] >= horizon]
+
+
+def day_slots(days: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
+    """One slot per day across the window, oldest first.
+
+    A day with no samples is `None`, never zero and never full. The distinction is the whole
+    point: a day nobody checked is not a day that was down, and it is not a day that was up.
+    Rendering it as either invents history.
+    """
+    tallies = {d["date"]: d for d in days}
+    slots = []
+    for offset in range(span - 1, -1, -1):
+        date = (today - dt.timedelta(days=offset)).isoformat()
+        tally = tallies.get(date)
+        slots.append({"date": date, "tally": tally})
+    return slots
+
+
+def uptime(days: list[dict]) -> dict | None:
+    """Checks passed out of checks made, with the denominator kept.
+
+    A bare percentage would be the dishonest form here. The collector's cadence is whatever
+    GitHub's scheduler grants it, so "100%" can mean four observations, and a reader deserves
+    to see which.
+    """
+    total = sum(d["total"] for d in days)
+    if total == 0:
+        return None
+    ok = sum(d["ok"] for d in days)
+    return {"ok": ok, "total": total, "percent": 100.0 * ok / total}
+
+
+def observed_cadence(days: list[dict], today: dt.date) -> float | None:
+    """Checks per day, measured rather than promised.
+
+    The collector asks to run every ten minutes and does not: scheduled workflows are queued,
+    not guaranteed. Whatever the page says about how often it looks has to come from the data.
+
+    The denominator is every day since the first sample, not the days that happen to have one.
+    Counting only active days is the flattering error: two bursts a month apart would report
+    the same healthy "two checks a day" as two consecutive days, because the empty month
+    between them would not be in the divisor. Days since the first sample rather than the whole
+    window, because a collector three days old has not missed eighty-seven days, it has not
+    lived through them.
+    """
+    if not days:
+        return None
+    first = dt.date.fromisoformat(min(d["date"] for d in days))
+    elapsed = max((today - first).days + 1, 1)
+    return sum(d["total"] for d in days) / elapsed
+
+
+def opened_at(item: dict) -> str:
+    return item.get("createdAt") or item.get("created_at") or ""
+
+
+def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
+    """GitHub issues as incidents, newest first.
+
+    Chosen because at three in the morning, on a phone, opening an issue and adding comments is
+    realistic and committing files is not. The authoring path has to be the easiest available or
+    the log stops being written exactly when it matters.
+
+    Scoped to the same window as the bars, because that is what the rest of the page is about,
+    with one exception that matters more than the rule: an incident still open is shown however
+    old it is. Ageing out an ongoing outage would be the single worst thing this page could do.
+    """
+    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
+    incidents = []
+    for issue in issues:
+        # `gh` spells this CLOSED and the REST API spells it closed, and comparing against one
+        # of them silently gets the other wrong in the worst direction: a resolved incident
+        # renders as still under investigation and never ages out of the log.
+        closed = str(issue.get("state", "")).lower() == "closed"
+        # Kept if anything about it happened inside the window: it opened here, or it ended
+        # here. A long outage that began before the window and was resolved inside it is
+        # exactly the kind the bars will be showing, and dropping it on its opening date alone
+        # would leave the log silent about the days the bars are red.
+        ended = (issue.get("closedAt") or issue.get("closed_at") or "")[:10]
+        within = opened_at(issue)[:10] >= horizon or (ended and ended >= horizon)
+        if closed and not within:
+            continue
+        labels = [l["name"] for l in issue.get("labels", [])]
+        # `resolved` is deliberately not readable from a label. Closing the issue is what
+        # resolves an incident, so an open issue wearing a stale `resolved` label would
+        # otherwise be published as over while it was still happening.
+        stage = next((s for s in ("monitoring", "identified", "investigating") if s in labels),
+                     None)
+        updates = sorted(issue.get("comments", []), key=opened_at)
+        incidents.append({
+            "title": issue.get("title", "Untitled incident"),
+            "url": issue.get("url") or issue.get("html_url", ""),
+            "stage": "resolved" if closed else (stage or "investigating"),
+            "opened": opened_at(issue)[:10],
+            # Sorted on the full timestamp, not the date. Two incidents on one bad day are
+            # exactly when the order matters and exactly when a date-only sort gives up.
+            "sort_key": opened_at(issue),
+            "updates": [
+                {"at": opened_at(c)[:16].replace("T", " "), "body": c.get("body", "").strip()}
+                for c in updates
+            ],
+        })
+    incidents.sort(key=lambda i: i["sort_key"], reverse=True)
+    return incidents
+
+
+def possibly_truncated(issues: list[dict], budget: int) -> bool:
+    """Whether the fetch could have cut an incident the page would otherwise show.
+
+    Asked by fetching one more than the budget, so a full page and an overflowing one are
+    distinguishable without guessing. `len(issues) >= budget` cannot tell them apart and cries
+    wolf on a list that is merely exactly the budget long.
+
+    An earlier version tried to be cleverer, ignoring a full fetch when everything in it opened
+    before the window on the grounds that nothing displayable had been lost. That reasoning
+    died the moment incidents began qualifying by when they were resolved rather than when they
+    opened: an incident opened in 2010 and closed yesterday belongs on this page, so no cutoff
+    on the opening date can rule anything out. The narrow question has no cheap answer, and the
+    blunt one does.
+    """
+    return bool(budget) and len(issues) > budget
+
+
+def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = False) -> dict:
+    components = summary.get("components", [])
+    banner, tone = overall(components)
+    rows = []
+    for component in components:
+        days = within_window(component.get("days", []), today)
+        rows.append({
+            "name": component.get("name") or component.get("id") or "Unnamed",
+            "description": component.get("description", ""),
+            "state": component.get("state", UNCONFIGURED),
+            "detail": component.get("detail"),
+            "slots": day_slots(days, today),
+            "uptime": uptime(days),
+            "cadence": observed_cadence(days, today),
+        })
+    return {
+        "banner": banner,
+        "tone": tone,
+        "generated_at": summary.get("generated_at"),
+        "rows": rows,
+        "incidents": parse_incidents(issues, today),
+        "truncated": truncated,
+        "span": SPAN_DAYS,
+    }
+
+
+# The light palette is lifted from web/src/styles/tokens/colors.css, not re-picked, so the page
+# cannot drift from the app.
+#
+# The dark one is mostly a borrow and partly a pick, which is worth being exact about because
+# "these are the terminal tokens" is true of six of the nine and no more. The grounds, inks and
+# two signal colours are `--term-bg`, `--term-chrome`, `--term-fg`, `--term-dim`, `--term-ok`
+# and `--term-error` verbatim. The secondary ink, the hairline and the link colour are chosen
+# here: nothing in colors.css covers them on a dark ground, the nearest match for the first
+# living only inside the `[data-no-color]` monochrome override, which is a different question
+# being asked.
+#
+# So there is no dark page palette in the tokens, and this block is the closest thing to one.
+# The proper fix is to put it there and have both this page and the app follow it.
+STYLE = """
+:root {
+  --paper: #fbfaf8; --paper-sunk: #f4f2ed;
+  --ink: #1a1917; --ink-2: #57544e; --ink-3: #8a867d;
+  --hairline: #e4e0d8;
+  --link: #2f5fb0;
+  --ok: #2f7a4d; --alert: #b23a2e;
+  --font-system: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 3rem 1.5rem 6rem;
+  background: var(--paper); color: var(--ink);
+  font-family: var(--font-system); font-size: 1rem; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 46rem; margin: 0 auto; }
+h1 { font-size: 1.75rem; letter-spacing: -0.011em; line-height: 1.2; margin: 0 0 0.25rem; }
+h2 { font-size: 1.375rem; line-height: 1.2; margin: 3rem 0 1rem; font-weight: 600; }
+h3 { font-size: 1rem; margin: 0; font-weight: 600; }
+p { margin: 0 0 1rem; }
+a { color: var(--link); }
+.meta { color: var(--ink-3); font-size: 0.8125rem; margin: 0; }
+.banner { margin: 2rem 0 0; padding: 1rem 1.25rem; border: 1px solid var(--hairline);
+          border-radius: 4px; background: #fff; display: flex; align-items: baseline;
+          gap: 0.75rem; }
+.banner strong { font-size: 1.125rem; font-weight: 600; }
+.dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--ok); } .dot.down { background: var(--alert); }
+.dot.unknown, .dot.unconfigured { background: var(--ink-3); }
+.component { padding: 1.25rem 0; border-bottom: 1px solid var(--hairline); }
+.component:last-of-type { border-bottom: 0; }
+.component-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.state { font-size: 0.8125rem; color: var(--ink-2); white-space: nowrap; }
+.desc { color: var(--ink-2); font-size: 0.875rem; margin: 0.125rem 0 0; }
+.bars { display: flex; gap: 1px; margin: 0.75rem 0 0.375rem; height: 1.75rem;
+        align-items: stretch; }
+.bar { flex: 1 1 0; min-width: 1px; border-radius: 1px; background: var(--ok); }
+.bar.down { background: var(--alert); }
+.bar.partial { background: linear-gradient(var(--alert) 50%, var(--ok) 50%); }
+.bar.none { background: var(--paper-sunk); }
+.scale { display: flex; justify-content: space-between; color: var(--ink-3); font-size: 0.8125rem; }
+.incident { padding: 1.25rem 0; border-bottom: 1px solid var(--hairline); }
+.incident:last-of-type { border-bottom: 0; }
+.stage { font-family: var(--font-mono); font-size: 0.8125rem; color: var(--ink-2);
+         text-transform: uppercase; letter-spacing: 0.02em; }
+.update { margin: 0.75rem 0 0; padding-left: 0.875rem; border-left: 2px solid var(--hairline); }
+.update time { display: block; font-family: var(--font-mono); font-size: 0.8125rem;
+               color: var(--ink-3); }
+footer { margin-top: 4rem; color: var(--ink-3); font-size: 0.8125rem; }
+@media (prefers-color-scheme: dark) {
+  /* --ink-2, --hairline and --link are chosen here; the rest are --term-* verbatim. */
+  :root { --paper: #16150f; --paper-sunk: #201e17; --ink: #d9d4c6; --ink-2: #b8b3a4;
+          --ink-3: #857f6d; --hairline: #2e2b22; --link: #9db6e0;
+          --ok: #86b57e; --alert: #e0705f; }
+  .banner { background: var(--paper-sunk); }
+}
+"""
+
+
+def e(text) -> str:
+    # Explicitly None rather than falsy: a legitimate 0 or False is a value to show, and
+    # `text or ""` would silently render it as nothing.
+    return html.escape("" if text is None else str(text))
+
+
+def bar_class(tally) -> str:
+    if tally is None:
+        return "none"
+    if tally["ok"] == tally["total"]:
+        return ""
+    return "down" if tally["ok"] == 0 else "partial"
+
+
+def bar_style(tally) -> str:
+    """A partial day drawn in proportion, not as a fixed half.
+
+    One failure in ten and nine in ten are different days, and a 50/50 gradient tells the
+    reader they were the same. The share of the bar that is red is the share of the checks
+    that failed.
+    """
+    if tally is None or tally["ok"] == tally["total"] or tally["ok"] == 0:
+        return ""
+    failed = 100.0 * (tally["total"] - tally["ok"]) / tally["total"]
+    return (f' style="background: linear-gradient(var(--alert) {failed:.0f}%,'
+            f' var(--ok) {failed:.0f}%)"')
+
+
+def bar_title(slot) -> str:
+    tally = slot["tally"]
+    if tally is None:
+        return f"{slot['date']}: not checked"
+    return f"{slot['date']}: {tally['ok']} of {tally['total']} checks passed"
+
+
+def render_component(row: dict) -> str:
+    bars = "".join(
+        f'<div class="bar {bar_class(s["tally"])}"{bar_style(s["tally"])}'
+        f' title="{e(bar_title(s))}"></div>'
+        for s in row["slots"]
+    )
+    if row["uptime"]:
+        up = row["uptime"]
+        # The denominator is not decoration. At the cadence this actually achieves, "100%" can
+        # rest on a handful of observations, and a reader who cannot see how many is being
+        # invited to trust a number nobody could stand behind.
+        summary = (f'{up["percent"]:.2f}% of {up["total"]} '
+                   f'{"check" if up["total"] == 1 else "checks"}')
+    else:
+        summary = "not measured"
+    lines = [row["description"], row["detail"]]
+    described = "".join(f'\n        <p class="desc">{e(line)}</p>' for line in lines if line)
+    return f"""      <section class="component">
+        <div class="component-head">
+          <h3>{e(row["name"])}</h3>
+          <span class="state"><span class="dot {e(row["state"])}"></span> {e(row["state"])}</span>
+        </div>{described}
+        <div class="bars" role="img"
+             aria-label="{e(row["name"])}: {e(summary)} over the last 90 days">{bars}</div>
+        <div class="scale"><span>90 days ago</span><span>{e(summary)}</span><span>today</span></div>
+      </section>
+"""
+
+
+def render_incident(incident: dict) -> str:
+    updates = "".join(
+        f'        <div class="update"><time>{e(u["at"])}</time>{e(u["body"])}</div>\n'
+        for u in incident["updates"]
+    )
+    return f"""      <article class="incident">
+        <div class="component-head">
+          <h3><a href="{e(incident["url"])}">{e(incident["title"])}</a></h3>
+          <span class="stage">{e(incident["stage"])}</span>
+        </div>
+        <p class="meta">Opened {e(incident["opened"])}</p>
+{updates}      </article>
+"""
+
+
+def render(model: dict, now: dt.datetime) -> str:
+    components = "".join(render_component(r) for r in model["rows"])
+    if model.get("incidents_unavailable"):
+        incidents = ('      <p class="desc">The incident log could not be read when this page '
+                     'was built, so it is not shown. That is not the same as there being '
+                     'none.</p>\n')
+    elif model["incidents"]:
+        incidents = "".join(render_incident(i) for i in model["incidents"])
+    else:
+        incidents = ('      <p class="desc">No incidents in the last 90 days. Anything still '
+                     'open is listed however old it is.</p>\n')
+    if model.get("truncated"):
+        # Only reachable if there are more incidents in the window than the fetch asked for.
+        # Saying so beats a list that is quietly short: this page is worth exactly as much as
+        # its worst unstated omission.
+        incidents += ('      <p class="desc">More incidents matched than this page fetched, so '
+                      'the list above is incomplete.</p>\n')
+
+    cadences = [r["cadence"] for r in model["rows"] if r["cadence"]]
+    if cadences:
+        per_day = sum(cadences) / len(cadences)
+        # Said plainly rather than as an interval. The collector asks for one every ten minutes
+        # and does not get it, so a promised cadence here would be a number this page made up.
+        sampling = (f"Uptime is sampled, not measured continuously: about "
+                    f"{per_day:.0f} {'check' if round(per_day) == 1 else 'checks'} a day per "
+                    f"component so far. A day nobody checked is shown blank rather than green.")
+    else:
+        sampling = "No checks have been recorded yet."
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sotto status</title>
+<style>{STYLE}</style>
+</head>
+<body>
+<main>
+  <h1>Sotto status</h1>
+  <p class="meta">Last checked {e(model["generated_at"])}</p>
+
+  <div class="banner">
+    <span class="dot {e(model["tone"])}"></span>
+    <strong>{e(model["banner"])}</strong>
+  </div>
+
+  <h2>Components</h2>
+{components}
+  <h2>Past incidents</h2>
+{incidents}
+  <footer>
+    <p>{e(sampling)}</p>
+    <p>This page is built from the checks in
+       <a href="https://github.com/getsotto/sotto">getsotto/sotto</a> and published separately
+       from the service it reports on, so it survives the service being gone.
+       Built {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}.</p>
+  </footer>
+</main>
+</body>
+</html>
+"""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--summary", required=True)
+    parser.add_argument("--incidents")
+    parser.add_argument("--incidents-unavailable", action="store_true",
+                        help="the incident log could not be read. Say so on the page rather "
+                             "than rendering the absence of data as an absence of incidents")
+    parser.add_argument("--fetch-limit", type=int, default=0,
+                        help="the incident budget. Fetch one more than this and hand the "
+                             "surplus over, so an overflowing list is reported as incomplete "
+                             "rather than silently short")
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+
+    with open(args.summary, encoding="utf-8") as f:
+        summary = json.load(f)
+    issues = []
+    if args.incidents and os.path.exists(args.incidents):
+        with open(args.incidents, encoding="utf-8") as f:
+            issues = json.load(f)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    truncated = possibly_truncated(issues, args.fetch_limit)
+    model = build(summary, issues, now.date(), truncated)
+    model["incidents_unavailable"] = args.incidents_unavailable
+    page = render(model, now)
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:
+        f.write(page)
+    print(f"wrote {os.path.join(args.out, 'index.html')} ({len(page)} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
