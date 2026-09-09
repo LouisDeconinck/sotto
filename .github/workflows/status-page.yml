@@ -20,7 +20,10 @@ on:
     paths:
       - "scripts/build-status"
       - ".github/workflows/status-page.yml"
-  # A backstop, in case a run of the collector is missed and takes the page's freshness with it.
+  # Not a backstop against the collector, which would be an odd thing to build on the same
+  # queue that misses collector runs. The window itself moves: the bars are ninety days back
+  # from today, so a page nobody rebuilds keeps showing yesterday's ninety days and quietly
+  # ages. This keeps the frame current even when no new sample has arrived.
   schedule:
     - cron: "23 */6 * * *"
   workflow_dispatch:

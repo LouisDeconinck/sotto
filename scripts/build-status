@@ -193,8 +193,14 @@ def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = F
     }
 
 
-# Lifted from web/src/styles/tokens/, not re-picked. The page is a Sotto surface and should
-# look like one; a second palette invented here would drift from the app within a release.
+# The light palette is lifted from web/src/styles/tokens/colors.css, not re-picked, so the page
+# cannot drift from the app.
+#
+# The dark one is a borrow rather than a lift, and worth saying so: there is no dark page
+# palette in the tokens, only the `--term-*` set the app uses for its terminal, and these are
+# those. It is a defensible borrow, since that set is the one place the design system has
+# already decided what Sotto looks like on a dark ground. The proper fix is a dark page palette
+# in the tokens, at which point this block should follow it rather than the terminal.
 STYLE = """
 :root {
   --paper: #fbfaf8; --paper-sunk: #f4f2ed;
