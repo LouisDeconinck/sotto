@@ -174,7 +174,7 @@ def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = F
     for component in components:
         days = component.get("days", [])
         rows.append({
-            "name": component.get("name", component["id"]),
+            "name": component.get("name") or component.get("id") or "Unnamed",
             "description": component.get("description", ""),
             "state": component.get("state", UNCONFIGURED),
             "detail": component.get("detail"),
@@ -269,6 +269,20 @@ def bar_class(tally) -> str:
     return "down" if tally["ok"] == 0 else "partial"
 
 
+def bar_style(tally) -> str:
+    """A partial day drawn in proportion, not as a fixed half.
+
+    One failure in ten and nine in ten are different days, and a 50/50 gradient tells the
+    reader they were the same. The share of the bar that is red is the share of the checks
+    that failed.
+    """
+    if tally is None or tally["ok"] == tally["total"] or tally["ok"] == 0:
+        return ""
+    failed = 100.0 * (tally["total"] - tally["ok"]) / tally["total"]
+    return (f' style="background: linear-gradient(var(--alert) {failed:.0f}%,'
+            f' var(--ok) {failed:.0f}%)"')
+
+
 def bar_title(slot) -> str:
     tally = slot["tally"]
     if tally is None:
@@ -278,7 +292,8 @@ def bar_title(slot) -> str:
 
 def render_component(row: dict) -> str:
     bars = "".join(
-        f'<div class="bar {bar_class(s["tally"])}" title="{e(bar_title(s))}"></div>'
+        f'<div class="bar {bar_class(s["tally"])}"{bar_style(s["tally"])}'
+        f' title="{e(bar_title(s))}"></div>'
         for s in row["slots"]
     )
     if row["uptime"]:

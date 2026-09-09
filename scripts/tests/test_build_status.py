@@ -65,6 +65,14 @@ class Bars(unittest.TestCase):
         self.assertEqual(page.bar_class({"ok": 1, "total": 2}), "partial")
         self.assertEqual(page.bar_class({"ok": 0, "total": 2}), "down")
 
+    def test_a_partly_failing_day_is_drawn_in_proportion(self):
+        # One failure in ten and nine in ten are different days; a fixed half tells the reader
+        # they were the same.
+        self.assertIn("10%", page.bar_style({"ok": 9, "total": 10}))
+        self.assertIn("90%", page.bar_style({"ok": 1, "total": 10}))
+        self.assertEqual(page.bar_style({"ok": 4, "total": 4}), "", "a clean day needs no shading")
+        self.assertEqual(page.bar_style(None), "")
+
     def test_the_hover_text_carries_the_counts(self):
         slot = {"date": "2026-09-09", "tally": {"ok": 1, "total": 4}}
         self.assertEqual(page.bar_title(slot), "2026-09-09: 1 of 4 checks passed")
@@ -173,6 +181,14 @@ class Incidents(unittest.TestCase):
                         "createdAt": "2025-01-01T00:00:00Z"}
         titles = [i["title"] for i in page.parse_incidents([stale, ancient_open], TODAY)]
         self.assertEqual(titles, ["Still open"])
+
+
+class Robustness(unittest.TestCase):
+    def test_a_component_with_no_name_does_not_take_the_build_down(self):
+        # The page is built from a file another job writes. A missing field should cost a
+        # label, not the whole status page at the moment somebody needs it.
+        model = page.build({"generated_at": "x", "components": [{"state": "ok"}]}, [], TODAY)
+        self.assertEqual(model["rows"][0]["name"], "Unnamed")
 
 
 class Rendering(unittest.TestCase):
