@@ -628,6 +628,67 @@ with the summary, but the commits do not. At this interval that is roughly fifty
 commits a year on a branch nothing else reads. Deleting the branch is a safe reset if it ever
 becomes awkward, since the next run recreates it, at the cost of the history it held.
 
+## Status page
+
+`scripts/build-status` renders one self-contained HTML file from two inputs: the summary the
+collector maintains, and the issues labelled `incident`. No scripts, no external assets, no
+fonts to fail to load. A status page whose own availability depends on a CDN is a joke told at
+its own expense.
+
+`.github/workflows/status-page.yml` publishes it to GitHub Pages, on purpose rather than beside
+the deployment: a status page hosted on the thing it reports on tells you nothing on the only
+day anybody visits it.
+
+### What it will not claim
+
+The collector runs when GitHub's scheduler gets round to it, which in practice is a few times a
+day rather than the six an hour its cron asks for. Three consequences are built into the page
+rather than papered over:
+
+- **A day with no checks is drawn blank**, not green and not red. A day nobody looked at is not
+  a day that was up, and shading it in either direction invents history.
+- **Every percentage carries its denominator**: `100.00% of 4 checks`, never a bare `100%`. At
+  this cadence a figure without its sample count is a number nobody could stand behind.
+- **The sampling rate quoted in the footer is measured from the data**, not the interval the
+  cron requests.
+
+If you want a denser uptime record than this, the external checker that watches
+`/health/ready` is the better source; it runs every few minutes and does not depend on a queue.
+
+### Setup
+
+1. **Enable Pages**: repository settings, Pages, source **GitHub Actions**.
+2. **Point the DNS**: a `CNAME` from `status.<your domain>` to `<owner>.github.io`, then set the
+   custom domain in the same settings page and wait for the certificate.
+3. **Create the label** the page reads: `gh label create incident --color B60205 --description
+   "A user-visible incident, rendered on the status page"`. The build tolerates it not existing;
+   an unlabelled repository simply has no incidents to show.
+
+### Running an incident
+
+Incidents are GitHub issues, chosen for one reason: at three in the morning on a phone, opening
+an issue and adding comments is realistic and committing files is not. The authoring path has to
+be the easiest available or the log stops being written exactly when it matters.
+
+- **Open** an issue labelled `incident`. The title is what the page shows.
+- **Update** by commenting. Each comment becomes a timestamped entry, in order.
+- **Stage** it by adding `investigating`, `identified` or `monitoring`. The page shows the
+  furthest one reached.
+- **Resolve** by closing the issue. That wins over any stage label still attached, so an
+  incident closed in a hurry does not sit on the page claiming to be under investigation.
+
+### Publishing it somewhere else
+
+The generator is Python 3 with no dependencies beyond the standard library and reads two JSON
+files:
+
+```sh
+scripts/build-status --summary summary.json --incidents incidents.json --out site/
+```
+
+`site/index.html` is the whole page. Serve it from any static host. Nothing about it needs
+GitHub Pages beyond it being free and outside the deployment's failure domain.
+
 ## Organisation-deletion metrics
 
 The deletion worker stores aggregate lifecycle counters in Postgres. Their fixed vocabulary, alert
