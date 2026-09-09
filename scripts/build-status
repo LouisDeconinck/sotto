@@ -221,7 +221,9 @@ footer { margin-top: 4rem; color: var(--ink-3); font-size: 0.8125rem; }
 
 
 def e(text) -> str:
-    return html.escape(str(text or ""))
+    # Explicitly None rather than falsy: a legitimate 0 or False is a value to show, and
+    # `text or ""` would silently render it as nothing.
+    return html.escape("" if text is None else str(text))
 
 
 def bar_class(tally) -> str:

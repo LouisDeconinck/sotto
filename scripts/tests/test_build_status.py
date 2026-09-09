@@ -181,6 +181,12 @@ class Rendering(unittest.TestCase):
         self.assertNotIn("incomplete", page.render(page.build(self.summary(), [], TODAY),
                                                    dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc)))
 
+    def test_a_zero_is_rendered_rather_than_blanked(self):
+        # `text or ""` would turn a legitimate 0 into nothing at all.
+        self.assertEqual(page.e(0), "0")
+        self.assertEqual(page.e(False), "False")
+        self.assertEqual(page.e(None), "")
+
     def test_it_says_so_when_nothing_has_been_observed(self):
         model = page.build({"generated_at": "x", "components": [component("unconfigured")]},
                            [], TODAY)
