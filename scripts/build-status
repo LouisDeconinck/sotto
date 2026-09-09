@@ -101,15 +101,17 @@ def parse_incidents(issues: list[dict]) -> list[dict]:
     incidents = []
     for issue in issues:
         labels = [l["name"] for l in issue.get("labels", [])]
-        stage = next((s for s in ("resolved", "monitoring", "identified", "investigating")
-                      if s in labels), None)
-        if issue.get("state") == "closed":
-            stage = "resolved"
+        # `resolved` is deliberately not readable from a label. Closing the issue is what
+        # resolves an incident, so an open issue wearing a stale `resolved` label would
+        # otherwise be published as over while it was still happening.
+        stage = next((s for s in ("monitoring", "identified", "investigating") if s in labels),
+                     None)
+        closed = issue.get("state") == "closed"
         updates = sorted(issue.get("comments", []), key=opened_at)
         incidents.append({
             "title": issue.get("title", "Untitled incident"),
             "url": issue.get("url") or issue.get("html_url", ""),
-            "stage": stage or "investigating",
+            "stage": "resolved" if closed else (stage or "investigating"),
             "opened": opened_at(issue)[:10],
             # Sorted on the full timestamp, not the date. Two incidents on one bad day are
             # exactly when the order matters and exactly when a date-only sort gives up.

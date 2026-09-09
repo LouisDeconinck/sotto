@@ -102,6 +102,13 @@ class Incidents(unittest.TestCase):
                  "labels": [{"name": "investigating"}], "comments": []}
         self.assertEqual(page.parse_incidents([issue])[0]["stage"], "resolved")
 
+    def test_a_resolved_label_does_not_resolve_an_open_incident(self):
+        # Closing the issue is what resolves an incident. Reading it from a label would let a
+        # stale one publish an outage as over while it was still happening.
+        issue = {"title": "Ongoing", "state": "open", "createdAt": "2026-09-08T10:00:00Z",
+                 "labels": [{"name": "resolved"}], "comments": []}
+        self.assertEqual(page.parse_incidents([issue])[0]["stage"], "investigating")
+
     def test_comments_become_the_updates_in_order(self):
         issue = {"title": "Outage", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [], "comments": [
