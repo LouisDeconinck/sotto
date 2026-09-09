@@ -178,7 +178,7 @@ sotto share DATABASE_URL     # one-time link for a single secret`}</code>
 }
 
 // Only rendered when a deployment has a status page of its own. There is no sensible default:
-// falling back to the hosted instance's page would point a self-hoster's users at somebody
+// falling back to the hosted deployment's page would point a self-hoster's users at somebody
 // else's uptime, which is worse than no link at all.
 const STATUS_URL = import.meta.env.VITE_STATUS_URL?.trim();
 
