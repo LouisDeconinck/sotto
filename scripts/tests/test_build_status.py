@@ -84,9 +84,26 @@ class Uptime(unittest.TestCase):
     def test_cadence_is_measured_not_assumed(self):
         # The collector asks for one check every ten minutes and does not get it. Whatever the
         # page says about how often it looks has to come from the data.
-        days = [{"date": "a", "ok": 2, "total": 2}, {"date": "b", "ok": 4, "total": 4}]
-        self.assertEqual(page.observed_cadence(days), 3.0)
-        self.assertIsNone(page.observed_cadence([]))
+        days = [{"date": "2026-09-08", "ok": 2, "total": 2},
+                {"date": "2026-09-09", "ok": 4, "total": 4}]
+        self.assertEqual(page.observed_cadence(days, TODAY), 3.0)
+        self.assertIsNone(page.observed_cadence([], TODAY))
+
+    def test_the_days_it_did_not_run_are_in_the_divisor(self):
+        # The flattering error. Counting only days that have a sample lets two bursts a month
+        # apart report the same density as two consecutive days, because the empty month
+        # between them never enters the sum.
+        bursts = [{"date": "2026-08-10", "ok": 2, "total": 2},
+                  {"date": "2026-09-09", "ok": 2, "total": 2}]
+        self.assertAlmostEqual(page.observed_cadence(bursts, TODAY), 4 / 31)
+
+    def test_a_young_collector_is_not_charged_for_days_before_it_existed(self):
+        # The other direction, and why this is not simply divided by the ninety day window: a
+        # collector two days old has not missed eighty-eight days, it has not lived through
+        # them, and reporting 0.04 checks a day would be its own kind of lie.
+        days = [{"date": "2026-09-08", "ok": 2, "total": 2},
+                {"date": "2026-09-09", "ok": 2, "total": 2}]
+        self.assertEqual(page.observed_cadence(days, TODAY), 2.0)
 
 
 class Incidents(unittest.TestCase):

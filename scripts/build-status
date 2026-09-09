@@ -76,15 +76,24 @@ def uptime(days: list[dict]) -> dict | None:
     return {"ok": ok, "total": total, "percent": 100.0 * ok / total}
 
 
-def observed_cadence(days: list[dict]) -> float | None:
+def observed_cadence(days: list[dict], today: dt.date) -> float | None:
     """Checks per day, measured rather than promised.
 
     The collector asks to run every ten minutes and does not: scheduled workflows are queued,
     not guaranteed. Whatever the page says about how often it looks has to come from the data.
+
+    The denominator is every day since the first sample, not the days that happen to have one.
+    Counting only active days is the flattering error: two bursts a month apart would report
+    the same healthy "two checks a day" as two consecutive days, because the empty month
+    between them would not be in the divisor. Days since the first sample rather than the whole
+    window, because a collector three days old has not missed eighty-seven days, it has not
+    lived through them.
     """
     if not days:
         return None
-    return sum(d["total"] for d in days) / len(days)
+    first = dt.date.fromisoformat(min(d["date"] for d in days))
+    elapsed = max((today - first).days + 1, 1)
+    return sum(d["total"] for d in days) / elapsed
 
 
 def opened_at(item: dict) -> str:
@@ -145,7 +154,7 @@ def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = F
             "detail": component.get("detail"),
             "slots": day_slots(days, today),
             "uptime": uptime(days),
-            "cadence": observed_cadence(days),
+            "cadence": observed_cadence(days, today),
         })
     return {
         "banner": banner,
