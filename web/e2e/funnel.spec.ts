@@ -12,6 +12,24 @@ import {
 // e2e/README.md for how to run it locally. Asserts on observable UI state only - text, URL,
 // visible elements - never component internals.
 
+// An unreachable server must say so in words a worried person can act on. The browser's own
+// "Failed to fetch" reads like the data failed rather than the connection, which in a secrets
+// manager is the difference between an inconvenience and a catastrophe.
+test("an unreachable server says so, rather than showing the browser's wording", async ({
+  page,
+}) => {
+  // Fail the request at the network layer, which is what a stopped server looks like from here.
+  // An HTTP error would not do: fetch resolves for those, and it is the rejection path being
+  // tested.
+  await page.route("**/auth/me", (route) => route.abort("connectionrefused"));
+
+  await page.goto("/app");
+
+  await expect(page.getByText(/could not reach the server/i)).toBeVisible();
+  await expect(page.getByText(/your secrets are safe/i)).toBeVisible();
+  await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
+});
+
 test("login, unlock, invite, and checkout", async ({ page }) => {
   await loginAndUnlock(page);
 
