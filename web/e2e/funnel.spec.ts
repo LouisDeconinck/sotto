@@ -30,6 +30,25 @@ test("an unreachable server says so, rather than showing the browser's wording",
   await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
 });
 
+test("a connection that dies mid-answer says the same thing", async ({ page }) => {
+  // Headers arrive, then the body does not. `fetch` has already resolved by then, so this
+  // rejects in the body read rather than in the request, and would otherwise reach the user as
+  // the raw browser wording the wrapper exists to replace. Indistinguishable from where they
+  // are sitting, so the message should be too.
+  await page.route("**/auth/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": "999" },
+      body: '{"user_id": "trunc',
+    });
+  });
+
+  await page.goto("/app");
+
+  await expect(page.getByText(/could not reach the server/i)).toBeVisible();
+  await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
+});
+
 test("login, unlock, invite, and checkout", async ({ page }) => {
   await loginAndUnlock(page);
 
