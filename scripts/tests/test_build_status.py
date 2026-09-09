@@ -111,13 +111,25 @@ class Incidents(unittest.TestCase):
         self.assertEqual([u["body"] for u in updates], ["Looking into it", "Fixed"])
         self.assertEqual(updates[0]["at"], "2026-09-01 10:30")
 
-    def test_newest_first(self):
-        def issue(title, day):
-            return {"title": title, "createdAt": f"2026-0{day}-01T00:00:00Z",
-                    "labels": [], "comments": []}
+    def test_newest_first_even_on_the_same_day(self):
+        # Two incidents on one bad day is exactly when the order matters, and exactly when
+        # sorting on the date alone stops distinguishing them.
+        def issue(title, at):
+            return {"title": title, "createdAt": at, "labels": [], "comments": []}
 
-        issues = [issue("Old", 8), issue("New", 9)]
-        self.assertEqual([i["title"] for i in page.parse_incidents(issues)], ["New", "Old"])
+        issues = [issue("Morning", "2026-09-08T09:00:00Z"),
+                  issue("Evening", "2026-09-08T21:00:00Z"),
+                  issue("Yesterday", "2026-09-07T12:00:00Z")]
+        self.assertEqual([i["title"] for i in page.parse_incidents(issues)],
+                         ["Evening", "Morning", "Yesterday"])
+
+    def test_updates_are_ordered_however_the_api_returned_them(self):
+        issue = {"title": "Outage", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
+                 "labels": [], "comments": [
+                     {"createdAt": "2026-09-01T12:00:00Z", "body": "Resolved"},
+                     {"createdAt": "2026-09-01T10:30:00Z", "body": "Looking into it"}]}
+        updates = page.parse_incidents([issue])[0]["updates"]
+        self.assertEqual([u["body"] for u in updates], ["Looking into it", "Resolved"])
 
 
 class Rendering(unittest.TestCase):

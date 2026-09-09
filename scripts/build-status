@@ -87,6 +87,10 @@ def observed_cadence(days: list[dict]) -> float | None:
     return sum(d["total"] for d in days) / len(days)
 
 
+def opened_at(item: dict) -> str:
+    return item.get("createdAt") or item.get("created_at") or ""
+
+
 def parse_incidents(issues: list[dict]) -> list[dict]:
     """GitHub issues as incidents, newest first.
 
@@ -101,18 +105,21 @@ def parse_incidents(issues: list[dict]) -> list[dict]:
                       if s in labels), None)
         if issue.get("state") == "closed":
             stage = "resolved"
+        updates = sorted(issue.get("comments", []), key=opened_at)
         incidents.append({
             "title": issue.get("title", "Untitled incident"),
             "url": issue.get("url") or issue.get("html_url", ""),
             "stage": stage or "investigating",
-            "opened": (issue.get("createdAt") or issue.get("created_at") or "")[:10],
+            "opened": opened_at(issue)[:10],
+            # Sorted on the full timestamp, not the date. Two incidents on one bad day are
+            # exactly when the order matters and exactly when a date-only sort gives up.
+            "sort_key": opened_at(issue),
             "updates": [
-                {"at": (c.get("createdAt") or c.get("created_at") or "")[:16].replace("T", " "),
-                 "body": c.get("body", "").strip()}
-                for c in issue.get("comments", [])
+                {"at": opened_at(c)[:16].replace("T", " "), "body": c.get("body", "").strip()}
+                for c in updates
             ],
         })
-    incidents.sort(key=lambda i: i["opened"], reverse=True)
+    incidents.sort(key=lambda i: i["sort_key"], reverse=True)
     return incidents
 
 
