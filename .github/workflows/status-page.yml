@@ -79,7 +79,7 @@ jobs:
           # told what was asked for so a full page can be reported as incomplete rather than
           # quietly truncated.
           gh issue list --label incident --state all --limit "$FETCH_LIMIT" \
-            --json title,url,state,createdAt,labels,comments > incidents.json 2>/dev/null \
+            --json title,url,state,createdAt,closedAt,labels,comments > incidents.json 2>/dev/null \
             || echo '[]' > incidents.json
 
       - name: Build

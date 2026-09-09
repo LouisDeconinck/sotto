@@ -155,12 +155,20 @@ class Incidents(unittest.TestCase):
                  "labels": [{"name": "resolved"}], "comments": []}
         self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "investigating")
 
+    def test_an_incident_resolved_inside_the_window_is_kept(self):
+        # It opened before the window and ended inside it, which is precisely the shape of a
+        # long outage. The bars will be showing those days; the log has to explain them.
+        long_one = {"title": "Long outage", "state": "closed", "labels": [], "comments": [],
+                    "createdAt": "2026-05-01T00:00:00Z", "closedAt": "2026-09-05T00:00:00Z"}
+        titles = [i["title"] for i in page.parse_incidents([long_one], TODAY)]
+        self.assertEqual(titles, ["Long outage"])
+
     def test_old_closed_incidents_age_out_but_open_ones_never_do(self):
         # The bars cover ninety days, so the log does too. The exception is the one that
         # matters: ageing out an incident that is still happening would be the worst thing
         # this page could do.
         stale = {"title": "Long resolved", "state": "closed", "labels": [], "comments": [],
-                 "createdAt": "2025-01-01T00:00:00Z"}
+                 "createdAt": "2025-01-01T00:00:00Z", "closedAt": "2025-01-02T00:00:00Z"}
         ancient_open = {"title": "Still open", "state": "open", "labels": [], "comments": [],
                         "createdAt": "2025-01-01T00:00:00Z"}
         titles = [i["title"] for i in page.parse_incidents([stale, ancient_open], TODAY)]

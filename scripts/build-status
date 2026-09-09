@@ -115,7 +115,13 @@ def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -
     incidents = []
     for issue in issues:
         closed = issue.get("state") == "closed"
-        if closed and opened_at(issue)[:10] < horizon:
+        # Kept if anything about it happened inside the window: it opened here, or it ended
+        # here. A long outage that began before the window and was resolved inside it is
+        # exactly the kind the bars will be showing, and dropping it on its opening date alone
+        # would leave the log silent about the days the bars are red.
+        ended = (issue.get("closedAt") or issue.get("closed_at") or "")[:10]
+        within = opened_at(issue)[:10] >= horizon or (ended and ended >= horizon)
+        if closed and not within:
             continue
         labels = [l["name"] for l in issue.get("labels", [])]
         # `resolved` is deliberately not readable from a label. Closing the issue is what
