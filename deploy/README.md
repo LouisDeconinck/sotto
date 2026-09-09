@@ -676,6 +676,12 @@ be the easiest available or the log stops being written exactly when it matters.
   furthest one reached.
 - **Resolve** by closing the issue. That wins over any stage label still attached, so an
   incident closed in a hurry does not sit on the page claiming to be under investigation.
+  Closing is the *only* thing that resolves one: a `resolved` label is ignored, because a stale
+  one would publish an outage as over while it was still happening.
+
+The log covers the same ninety days as the bars, with one exception worth knowing: an incident
+still open is shown however old it is. If more incidents ever match than the build fetches, the
+page says the list is incomplete rather than quietly showing a short one.
 
 ### Publishing it somewhere else
 
