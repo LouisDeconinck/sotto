@@ -46,8 +46,10 @@ async function request(path: string, init: RequestInit = CREDS): Promise<Respons
     return await fetch(path, init);
   } catch (cause) {
     // An abort is the caller's own doing and already means something to them; only a genuine
-    // network failure gets rewritten.
-    if (cause instanceof DOMException && cause.name === "AbortError") {
+    // network failure gets rewritten. Matched on the name alone: browsers reject with a
+    // DOMException, but a polyfilled or cross-realm signal need not, and narrowing to that type
+    // would relabel a deliberate cancellation as the server being unreachable.
+    if (cause instanceof Error && cause.name === "AbortError") {
       throw cause;
     }
     throw new ServerUnreachableError(cause);
