@@ -361,7 +361,11 @@ def render_incident(incident: dict) -> str:
 
 def render(model: dict, now: dt.datetime) -> str:
     components = "".join(render_component(r) for r in model["rows"])
-    if model["incidents"]:
+    if model.get("incidents_unavailable"):
+        incidents = ('      <p class="desc">The incident log could not be read when this page '
+                     'was built, so it is not shown. That is not the same as there being '
+                     'none.</p>\n')
+    elif model["incidents"]:
         incidents = "".join(render_incident(i) for i in model["incidents"])
     else:
         incidents = ('      <p class="desc">No incidents in the last 90 days. Anything still '
@@ -424,6 +428,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--incidents")
+    parser.add_argument("--incidents-unavailable", action="store_true",
+                        help="the incident log could not be read. Say so on the page rather "
+                             "than rendering the absence of data as an absence of incidents")
     parser.add_argument("--fetch-limit", type=int, default=0,
                         help="the incident budget. Fetch one more than this and hand the "
                              "surplus over, so an overflowing list is reported as incomplete "
@@ -440,7 +447,9 @@ def main() -> int:
 
     now = dt.datetime.now(dt.timezone.utc)
     truncated = possibly_truncated(issues, args.fetch_limit)
-    page = render(build(summary, issues, now.date(), truncated), now)
+    model = build(summary, issues, now.date(), truncated)
+    model["incidents_unavailable"] = args.incidents_unavailable
+    page = render(model, now)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:
         f.write(page)

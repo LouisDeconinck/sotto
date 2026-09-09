@@ -81,16 +81,35 @@ jobs:
           # is. Fetch one more than the budget the builder is told about: a list of exactly the
           # budget and a list that overflowed are otherwise indistinguishable, and the page
           # would either cry wolf on a complete list or stay quiet on a cut one.
-          gh issue list --label incident --state all --limit "$(( INCIDENT_BUDGET + 1 ))" \
-            --json title,url,state,createdAt,closedAt,labels,comments > incidents.json 2>/dev/null \
-            || echo '[]' > incidents.json
+          # A failure here must not become "no incidents". That is the one sentence on this
+          # page nobody should ever read without it being true, and swallowing an API error
+          # into an empty list publishes it during exactly the outage that caused the error.
+          # Say the log is unavailable instead, and let the components still publish.
+          if gh issue list --label incident --state all --limit "$(( INCIDENT_BUDGET + 1 ))" \
+               --json title,url,state,createdAt,closedAt,labels,comments > incidents.json; then
+            :
+          elif ! gh label list --limit 200 --json name --jq '.[].name' | grep -qx incident; then
+            # No such label, which on a deployment that has never had an incident is the good
+            # case rather than an error.
+            echo '[]' > incidents.json
+          else
+            echo "could not read the incident log" >&2
+            rm -f incidents.json
+          fi
 
       - name: Build
         env:
           INCIDENT_BUDGET: "200"
         run: |
-          scripts/build-status --summary summary.json --incidents incidents.json \
-            --fetch-limit "$INCIDENT_BUDGET" --out site
+          set -euo pipefail
+          # No incidents file means the fetch failed, which the page reports rather than
+          # rendering as an empty log.
+          if [ -f incidents.json ]; then
+            scripts/build-status --summary summary.json --incidents incidents.json \
+              --fetch-limit "$INCIDENT_BUDGET" --out site
+          else
+            scripts/build-status --summary summary.json --incidents-unavailable --out site
+          fi
 
       - uses: actions/upload-pages-artifact@v3
         with:

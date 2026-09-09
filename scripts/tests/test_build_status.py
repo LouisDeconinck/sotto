@@ -268,6 +268,16 @@ class Rendering(unittest.TestCase):
         self.assertEqual(page.e(False), "False")
         self.assertEqual(page.e(None), "")
 
+    def test_an_unreadable_incident_log_is_not_an_empty_one(self):
+        # The one sentence on this page nobody should read without it being true. Swallowing a
+        # failed fetch into an empty list publishes "no incidents" during exactly the outage
+        # that caused the fetch to fail.
+        model = page.build(self.summary(), [], TODAY)
+        model["incidents_unavailable"] = True
+        out = page.render(model, dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc))
+        self.assertIn("could not be read", out)
+        self.assertNotIn("No incidents in the last 90 days", out)
+
     def test_it_says_so_when_nothing_has_been_observed(self):
         model = page.build({"generated_at": "x", "components": [component("unconfigured")]},
                            [], TODAY)
