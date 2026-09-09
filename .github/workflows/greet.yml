@@ -3,7 +3,10 @@ name: Greet first-time contributors
 on:
   issues:
     types: [opened]
-  pull_request:
+  # pull_request_target, not pull_request: fork PRs get a read-only token under
+  # pull_request, so posting the greeting would 403. Safe: this job only posts a
+  # comment and never checks out PR code.
+  pull_request_target:
     types: [opened]
 
 permissions:
