@@ -70,7 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          FETCH_LIMIT: "200"
+          INCIDENT_BUDGET: "200"
         run: |
           set -euo pipefail
           # Every issue carrying the incident label, open or closed, with its comments as the
@@ -78,17 +78,19 @@ jobs:
           # an incident nothing has created it, and that is the good case.
           #
           # `gh` pages through the API up to this limit, so the number is the only lever there
-          # is. It is set far above any plausible ninety day incident count, and the builder is
-          # told what was asked for so a full page can be reported as incomplete rather than
-          # quietly truncated.
-          gh issue list --label incident --state all --limit "$FETCH_LIMIT" \
+          # is. Fetch one more than the budget the builder is told about: a list of exactly the
+          # budget and a list that overflowed are otherwise indistinguishable, and the page
+          # would either cry wolf on a complete list or stay quiet on a cut one.
+          gh issue list --label incident --state all --limit "$(( INCIDENT_BUDGET + 1 ))" \
             --json title,url,state,createdAt,closedAt,labels,comments > incidents.json 2>/dev/null \
             || echo '[]' > incidents.json
 
       - name: Build
+        env:
+          INCIDENT_BUDGET: "200"
         run: |
           scripts/build-status --summary summary.json --incidents incidents.json \
-            --fetch-limit 200 --out site
+            --fetch-limit "$INCIDENT_BUDGET" --out site
 
       - uses: actions/upload-pages-artifact@v3
         with:

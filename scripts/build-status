@@ -147,24 +147,21 @@ def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -
     return incidents
 
 
-def possibly_truncated(issues: list[dict], fetch_limit: int, today: dt.date,
-                       span: int = SPAN_DAYS) -> bool:
+def possibly_truncated(issues: list[dict], budget: int) -> bool:
     """Whether the fetch could have cut an incident the page would otherwise show.
 
-    Two ways to get this wrong, and the first version managed both. Warning whenever the fetch
-    came back full cries wolf on a list that is merely exactly the limit long. And judging it
-    before the window filter warns about incidents that were never going to be displayed, so a
-    repository with a long history would carry the notice for ever on a complete page.
+    Asked by fetching one more than the budget, so a full page and an overflowing one are
+    distinguishable without guessing. `len(issues) >= budget` cannot tell them apart and cries
+    wolf on a list that is merely exactly the budget long.
 
-    What actually matters is whether anything was cut from inside the window. The API returns
-    newest first, so a full fetch loses the oldest; if the oldest one that survived is still
-    inside the window, older in-window incidents may have gone with it.
+    An earlier version tried to be cleverer, ignoring a full fetch when everything in it opened
+    before the window on the grounds that nothing displayable had been lost. That reasoning
+    died the moment incidents began qualifying by when they were resolved rather than when they
+    opened: an incident opened in 2010 and closed yesterday belongs on this page, so no cutoff
+    on the opening date can rule anything out. The narrow question has no cheap answer, and the
+    blunt one does.
     """
-    if not fetch_limit or len(issues) < fetch_limit:
-        return False
-    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
-    oldest = min((opened_at(i)[:10] for i in issues if opened_at(i)), default="")
-    return bool(oldest) and oldest >= horizon
+    return bool(budget) and len(issues) > budget
 
 
 def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = False) -> dict:
@@ -406,8 +403,9 @@ def main() -> int:
     parser.add_argument("--summary", required=True)
     parser.add_argument("--incidents")
     parser.add_argument("--fetch-limit", type=int, default=0,
-                        help="how many incidents the caller asked for, so a full page can be "
-                             "reported as possibly incomplete rather than silently short")
+                        help="the incident budget. Fetch one more than this and hand the "
+                             "surplus over, so an overflowing list is reported as incomplete "
+                             "rather than silently short")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -419,7 +417,7 @@ def main() -> int:
             issues = json.load(f)
 
     now = dt.datetime.now(dt.timezone.utc)
-    truncated = possibly_truncated(issues, args.fetch_limit, now.date())
+    truncated = possibly_truncated(issues, args.fetch_limit)
     page = render(build(summary, issues, now.date(), truncated), now)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:

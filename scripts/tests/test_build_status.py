@@ -213,22 +213,22 @@ class Rendering(unittest.TestCase):
         self.assertNotIn("<img src=x", out)
         self.assertIn("&lt;img src=x", out)
 
-    def test_a_short_fetch_never_warns(self):
-        issues = [{"createdAt": "2026-09-08T00:00:00Z"}] * 3
-        self.assertFalse(page.possibly_truncated(issues, 200, TODAY))
+    def test_a_list_within_budget_never_warns(self):
+        self.assertFalse(page.possibly_truncated([{}] * 3, 200))
+        self.assertFalse(page.possibly_truncated([{}] * 200, 200), "exactly full is not over")
 
-    def test_a_full_fetch_of_old_incidents_does_not_warn(self):
-        # The list came back full, but everything in it predates the window, so nothing the
-        # page would have shown was cut. Warning here would leave a permanent notice on a
-        # complete page for any repository with a long history.
-        issues = [{"createdAt": "2025-01-01T00:00:00Z"}] * 5
-        self.assertFalse(page.possibly_truncated(issues, 5, TODAY))
+    def test_one_more_than_the_budget_warns(self):
+        # The fetch asks for budget + 1 precisely so this is a fact rather than a guess.
+        self.assertTrue(page.possibly_truncated([{}] * 201, 200))
 
-    def test_a_full_fetch_of_recent_incidents_warns(self):
-        # Everything returned is inside the window and the fetch was full, so older in-window
-        # incidents may have been cut off the end.
-        issues = [{"createdAt": "2026-09-08T00:00:00Z"}] * 5
-        self.assertTrue(page.possibly_truncated(issues, 5, TODAY))
+    def test_an_old_incident_resolved_recently_cannot_be_reasoned_away(self):
+        # The trap in the cleverer version this replaced. These all opened long before the
+        # window and are all displayed anyway, because they were resolved inside it, so a
+        # judgement based on opening dates would have called a truncated list complete.
+        issues = [{"createdAt": "2025-01-01T00:00:00Z", "closedAt": "2026-09-05T00:00:00Z",
+                   "state": "closed", "labels": [], "comments": [], "title": "x"}] * 6
+        self.assertEqual(len(page.parse_incidents(issues, TODAY)), 6, "all of them display")
+        self.assertTrue(page.possibly_truncated(issues, 5))
 
     def test_a_full_fetch_is_reported_as_possibly_incomplete(self):
         # A short list that does not say it is short is the one failure a page about honesty
