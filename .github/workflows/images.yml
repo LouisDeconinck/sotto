@@ -39,10 +39,39 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Push a per-arch staging tag; the merge job below combines them and applies the real tags.
+      - name: Collect the web build arguments
+        id: buildargs
+        env:
+          SOTTO_PUBLIC_URL: ${{ vars.SOTTO_PUBLIC_URL }}
+          VITE_STATUS_URL: ${{ vars.VITE_STATUS_URL }}
+          VITE_ORGANISATION_DELETION_ENABLED: ${{ vars.VITE_ORGANISATION_DELETION_ENABLED }}
+        run: |
+          set -euo pipefail
+          # deploy/Dockerfile.web has declared these since the deletion flag needed the first
+          # one, and nothing ever passed them, so every published image has silently taken the
+          # defaults and the only way to change one was to build on the host.
+          #
+          # Only the variables that are actually set are passed. Docker's own documentation does
+          # not say whether `--build-arg FOO=` leaves the ARG default alone or overwrites it with
+          # an empty string, and the difference matters: SOTTO_PUBLIC_URL empty fails the build
+          # outright, because web/vite.config.ts validates it as an origin. Omitting an unset
+          # variable makes the question moot rather than betting on the answer.
+          {
+            echo "args<<BUILD_ARGS_EOF"
+            for name in SOTTO_PUBLIC_URL VITE_STATUS_URL VITE_ORGANISATION_DELETION_ENABLED; do
+              value="${!name}"
+              if [ -n "$value" ]; then
+                echo "${name}=${value}"
+              fi
+            done
+            echo "BUILD_ARGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ steps.buildargs.outputs.args }}
           platforms: linux/${{ matrix.arch }}
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:stage-${{ github.run_id }}-${{ matrix.arch }}
