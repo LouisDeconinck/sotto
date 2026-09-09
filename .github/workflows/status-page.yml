@@ -14,6 +14,14 @@ on:
   workflow_run:
     workflows: ["Status collector"]
     types: [completed]
+  # An incident being opened, updated, staged or resolved. Without this the page waits for a
+  # collector run or the six hourly rebuild, so the moment somebody most needs the log
+  # published is the moment it is hours stale. Comments included: a staged update nobody can
+  # read is not an update.
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
   # Design and copy changes, which come from main rather than from the data.
   push:
     branches: [main]
@@ -40,7 +48,13 @@ concurrency:
 jobs:
   build:
     name: build the page
-    if: github.repository == 'getsotto/sotto'
+    # Guarded to the canonical repository, and for issue events to incidents only: every issue
+    # and every pull request comment reaches this workflow otherwise, and rebuilding the page
+    # for a code review is a waste of everyone's minutes.
+    if: >-
+      github.repository == 'getsotto/sotto' &&
+      (!contains(fromJSON('["issues", "issue_comment"]'), github.event_name) ||
+       contains(github.event.issue.labels.*.name, 'incident'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
