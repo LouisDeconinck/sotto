@@ -9,8 +9,53 @@ import type { SecretEntry } from "./vault";
 // Authed requests send the httpOnly session cookie. Same-origin (dev proxy) keeps CSP tight.
 const CREDS: RequestInit = { credentials: "include" };
 
+/**
+ * The server could not be reached at all: the request never got an answer, as opposed to getting
+ * an unwelcome one.
+ *
+ * Worth its own type because in a secrets manager the difference between those two is the whole
+ * question a worried person is asking. The browser's own wording for this is "Failed to fetch",
+ * which reads like the data failed rather than the connection, and someone looking at it has no
+ * way to tell whether the service is down or their vault is broken. Only one of those is
+ * frightening, and it is not the one that is happening.
+ */
+export class ServerUnreachableError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Could not reach the server. Your secrets are safe and still encrypted on your device; " +
+        "this is a connection problem, not a problem with your data.",
+    );
+    this.name = "ServerUnreachableError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * `fetch`, with an unreachable server reported as one.
+ *
+ * `fetch` rejects only for network-level failures: an HTTP error, however unwelcome, resolves
+ * normally. So every rejection caught here means no answer arrived rather than a bad one, and
+ * the distinction needs no guessing.
+ *
+ * Deliberately not matched on the message, which is browser-specific and would rot: Chrome says
+ * "Failed to fetch", Firefox "NetworkError when attempting to fetch resource", Node "fetch
+ * failed". The type is the contract; the wording is not.
+ */
+async function request(path: string, init: RequestInit = CREDS): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (cause) {
+    // An abort is the caller's own doing and already means something to them; only a genuine
+    // network failure gets rewritten.
+    if (cause instanceof DOMException && cause.name === "AbortError") {
+      throw cause;
+    }
+    throw new ServerUnreachableError(cause);
+  }
+}
+
 async function authedJson<T>(path: string): Promise<T> {
-  const resp = await fetch(path, CREDS);
+  const resp = await request(path, CREDS);
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
@@ -19,7 +64,7 @@ async function authedJson<T>(path: string): Promise<T> {
 
 /// The current session's user, or `null` if not logged in.
 export async function me(): Promise<{ userId: string } | null> {
-  const resp = await fetch("/auth/me", CREDS);
+  const resp = await request("/auth/me", CREDS);
   if (resp.status === 401) {
     return null;
   }
@@ -31,7 +76,7 @@ export async function me(): Promise<{ userId: string } | null> {
 }
 
 export async function logout(): Promise<void> {
-  const resp = await fetch("/auth/logout", { method: "POST", ...CREDS });
+  const resp = await request("/auth/logout", { method: "POST", ...CREDS });
   if (!resp.ok) {
     // The session cookie is httpOnly, so only the server can clear it; report failure rather than
     // letting callers assume the session is gone.
@@ -49,7 +94,7 @@ export interface Account {
 
 /// The account's KDF salt + master-sealed private keys, or `null` if the account isn't set up.
 export async function fetchAccount(): Promise<Account | null> {
-  const resp = await fetch("/account", CREDS);
+  const resp = await request("/account", CREDS);
   if (resp.status === 404) {
     return null;
   }
@@ -105,7 +150,7 @@ export async function fetchEnvironments(projectId: string): Promise<Environment[
 /// The caller's own vault-key grant for an environment, or `null` if they have none (access
 /// without a key: the org lets them see ciphertext, but nobody granted them the vault key).
 export async function fetchMyGrant(envId: string): Promise<Uint8Array | null> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/grant`, CREDS);
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/grant`, CREDS);
   if (resp.status === 404) {
     return null;
   }
@@ -197,7 +242,7 @@ function deletionResponseError(resp: Response, fallback: string): Error {
 export async function fetchOrganisationDeletionStatus(
   orgId: string,
 ): Promise<OrganisationDeletionStatus | null> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion`, CREDS);
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion`, CREDS);
   if (resp.status === 404) {
     return null;
   }
@@ -211,7 +256,7 @@ export async function fetchOrganisationDeletionStatus(
 export async function requestOrganisationDeletion(
   orgId: string,
 ): Promise<OrganisationDeletionStatus> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -230,7 +275,7 @@ export async function requestOrganisationDeletion(
 export async function cancelOrganisationDeletion(
   orgId: string,
 ): Promise<OrganisationDeletionStatus> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion/cancel`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion/cancel`, {
     method: "POST",
     ...CREDS,
   });
@@ -272,7 +317,7 @@ export async function fetchEntitlements(orgId: string): Promise<Entitlements> {
 /// Start a Team subscription checkout (admin/owner); returns the Stripe Checkout page URL for the
 /// browser to navigate to. The tier itself flips when the webhook confirms payment.
 export async function createCheckout(orgId: string): Promise<string> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/billing/checkout`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/billing/checkout`, {
     method: "POST",
     ...CREDS,
   });
@@ -292,7 +337,7 @@ export async function createCheckout(orgId: string): Promise<string> {
 /// Open Stripe's customer portal (admin/owner) to manage or cancel the subscription; returns the
 /// portal URL for the browser to navigate to.
 export async function createPortal(orgId: string): Promise<string> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/billing/portal`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/billing/portal`, {
     method: "POST",
     ...CREDS,
   });
@@ -352,7 +397,7 @@ export async function grantOrgKey(
   userId: string,
   encOrgKey: Uint8Array,
 ): Promise<void> {
-  const resp = await fetch(
+  const resp = await request(
     `/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}/org-key`,
     {
       method: "POST",
@@ -392,7 +437,7 @@ export interface InvitedMember {
 
 /// Invite an existing Sotto user into an org by email.
 export async function inviteMember(orgId: string, email: string): Promise<InvitedMember> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/invites`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/invites`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email }),
@@ -420,7 +465,7 @@ export async function createGrant(
   userId: string,
   encVaultKey: Uint8Array,
 ): Promise<void> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/grants`, {
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/grants`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ user_id: userId, enc_vault_key: bytesToStandardB64(encVaultKey) }),
@@ -523,7 +568,7 @@ export interface RotatePayload {
 
 /// Apply a key rotation (rewrapped keys + the replacement grant set) at a base revision.
 export async function postRotate(envId: string, payload: RotatePayload): Promise<void> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/rotate`, {
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/rotate`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -561,7 +606,7 @@ export async function postRotate(envId: string, payload: RotatePayload): Promise
 
 /// Create a share link (session required); returns the public token.
 export async function createShare(encBlob: Uint8Array, maxViews: number): Promise<string> {
-  const resp = await fetch("/shares", {
+  const resp = await request("/shares", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ enc_blob: bytesToStandardB64(encBlob), max_views: maxViews }),
@@ -588,7 +633,7 @@ interface ShareResponse {
 }
 
 export async function fetchShare(token: string): Promise<Share> {
-  const resp = await fetch(`/shares/${encodeURIComponent(token)}`);
+  const resp = await request(`/shares/${encodeURIComponent(token)}`);
   if (resp.status === 404) {
     throw new ShareUnavailable(
       "This link is invalid, expired, revoked, or has already been viewed.",
@@ -622,7 +667,7 @@ export interface Community {
 /// the server cannot reach GitHub and has nothing cached - the page then hides the counts.
 export async function fetchCommunity(): Promise<Community | null> {
   try {
-    const resp = await fetch("/community");
+    const resp = await request("/community");
     if (!resp.ok) {
       return null;
     }
