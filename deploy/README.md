@@ -383,6 +383,18 @@ this section exists.
 - **Restore heartbeat stopped**: the monthly drill is not running, which means the backups are
   once again unverified, which is the state this whole section was built to leave.
 
+### Linking it from the app
+
+Set the repository variable `VITE_STATUS_URL` to the page's address and the landing footer gains
+a **Status** link on the next image build. It is empty by default and the link is simply absent
+when unset, because sending a self-hosted deployment's users to somebody else's uptime page
+would be worse than sending them nowhere.
+
+That variable reaches the build through `images.yml`, along with `SOTTO_PUBLIC_URL` and
+`VITE_ORGANISATION_DELETION_ENABLED`. Those had been declared in `deploy/Dockerfile.web` and
+passed by nothing, so every published image took the defaults and the only way to change one was
+to build on the host.
+
 ### Setting it up
 
 1. Create the account and the first two monitors. The web app one is a plain HTTP check; the API

@@ -22,6 +22,11 @@ ENV VITE_ORGANISATION_DELETION_ENABLED=${VITE_ORGANISATION_DELETION_ENABLED}
 # crawler rules, sitemap) by web/vite.config.ts. Same meaning as the server's variable.
 ARG SOTTO_PUBLIC_URL=https://getsotto.co.uk
 ENV SOTTO_PUBLIC_URL=${SOTTO_PUBLIC_URL}
+# This deployment's own status page, linked from the landing footer. Deliberately empty by
+# default: pointing a self-hosted deployment's users at somebody else's uptime page would be
+# worse than showing no link, which is what an empty value does.
+ARG VITE_STATUS_URL=
+ENV VITE_STATUS_URL=${VITE_STATUS_URL}
 RUN cd web && npm ci && npm run build
 
 # Build a Caddy binary bundling the caddy-ratelimit plugin, which powers the `rate_limit` directive

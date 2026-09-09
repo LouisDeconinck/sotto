@@ -166,6 +166,7 @@ sotto share DATABASE_URL     # one-time link for a single secret`}</code>
           <a href={`${REPO}/blob/main/THREAT-MODEL.md`}>Threat model</a>
           <a href={`${REPO}/blob/main/SECURITY.md`}>Security policy</a>
           <a href={`${REPO}/blob/main/deploy/README.md`}>Run your own</a>
+          {STATUS_URL && <a href={STATUS_URL}>Status</a>}
           <a href="/app">Log in</a>
         </nav>
         <p className="muted">
@@ -175,6 +176,11 @@ sotto share DATABASE_URL     # one-time link for a single secret`}</code>
     </main>
   );
 }
+
+// Only rendered when a deployment has a status page of its own. There is no sensible default:
+// falling back to the hosted deployment's page would point a self-hoster's users at somebody
+// else's uptime, which is worse than no link at all.
+const STATUS_URL = import.meta.env.VITE_STATUS_URL?.trim();
 
 const GOOD_FIRST =
   `${REPO}/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22`;

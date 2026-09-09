@@ -270,6 +270,12 @@ jobs:
 
       - name: Build the web app
         working-directory: web
+        env:
+          # Built configured on purpose. Unset, the status link is absent from both the React
+          # footer and the prerendered snapshot, so they agree and a test proves nothing about
+          # the case where they can disagree. This is the build the funnel suite then asserts
+          # against, with scripting on and off.
+          VITE_STATUS_URL: https://status.example.test
         run: |
           npm ci
           npm run build

@@ -2,6 +2,8 @@
 
 interface ImportMetaEnv {
   readonly VITE_ORGANISATION_DELETION_ENABLED?: string;
+  /** This deployment's own status page. Unset means no status link is shown. */
+  readonly VITE_STATUS_URL?: string;
 }
 
 interface ImportMeta {

@@ -67,6 +67,31 @@ function sriPlugin(): Plugin {
   };
 }
 
+/**
+ * The footer's status link, for the snapshot, matching what `<Landing>` renders for the same
+ * configuration.
+ *
+ * It has to be here as well as in the component, and the reason is the contract below rather
+ * than the feature: with the variable set, a React footer carrying the link and a snapshot
+ * without it show crawlers different copy from users, which is the cloaking that contract
+ * forbids. Absent the variable both render nothing and agree, which is exactly why leaving this
+ * out looked fine.
+ *
+ * The value is handed in from Vite's resolved client env rather than read from `process.env`,
+ * because those are not the same thing: Vite loads `.env` files into `import.meta.env` without
+ * touching `process.env`, so a deployment configuring this through a `.env` file would have got
+ * the link in React and not in the snapshot. The resolved env is literally what becomes
+ * `import.meta.env`, so the two cannot disagree about it.
+ */
+function statusLink(url: string | undefined): string {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const escaped = trimmed.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return `<a href="${escaped}">Status</a>`;
+}
+
 // Pre-rendered SEO snapshot of the landing page (`/`). The source index.html ships an
 // otherwise empty `<div id="root">`, which leaves crawlers and no-JS visitors with nothing.
 // This plugin inlines a static snapshot of `src/Landing.tsx` into that div at build time;
@@ -130,7 +155,7 @@ function sitemapXml(origin: string): string {
 </urlset>
 `;
 }
-const SEO_SNAPSHOT = `<main class="landing">
+const seoSnapshot = (statusUrl: string | undefined) => `<main class="landing">
 <header><span class="wordmark">Sotto</span><nav aria-label="Site"><a href="#how">How it works</a><a href="#trust">Trust</a><a href="#pricing">Pricing</a><a href="#open-source">Contribute</a><a href="https://github.com/getsotto/sotto">GitHub</a><a class="login" href="/app">Log in</a></nav></header>
 <section class="hero"><h1>Stop Slacking your <code>.env</code> files.</h1><p class="lead">Sotto syncs secrets across your team with end-to-end encryption. Values are encrypted on your machine before they leave it and decrypted only on your teammates’ machines. The server stores ciphertext it cannot read.</p><div class="install"><code>curl -fsSL https://raw.githubusercontent.com/getsotto/sotto/main/install.sh | sh</code><button class="sm" type="button" disabled aria-live="polite">Copy</button></div><p class="muted">Signed binaries for macOS and Linux. The installer verifies the checksum, and the Sigstore signature when <code>cosign</code> is installed. Prefer to <a href="https://github.com/getsotto/sotto/blob/main/install.sh">read it first</a>? Or grab a tarball from <a href="https://github.com/getsotto/sotto/releases">releases</a>.</p></section>
 <pre class="term"><code>$ sotto init
@@ -163,7 +188,7 @@ sotto import .env            # optional: pull in an existing file, still encrypt
 sotto run -- npm start       # inject secrets into any command
 sotto login &amp;&amp; sotto push    # optional: sync ciphertext via getsotto.co.uk
 sotto share DATABASE_URL     # one-time link for a single secret</code></pre><p>Sotto works fully offline until you <code>sotto login</code>. Sync is a feature, not a requirement. The web vault at this address decrypts in your browser, with keys that never leave your devices.</p></section>
-<footer><nav aria-label="Footer"><a href="https://github.com/getsotto/sotto">GitHub</a><a href="#open-source">Contribute</a><a href="https://github.com/getsotto/sotto/releases">Releases</a><a href="https://github.com/getsotto/sotto/blob/main/THREAT-MODEL.md">Threat model</a><a href="https://github.com/getsotto/sotto/blob/main/SECURITY.md">Security policy</a><a href="https://github.com/getsotto/sotto/blob/main/deploy/README.md">Run your own</a><a href="/app">Log in</a></nav><p class="muted">Sotto takes its name from <em>sotto voce</em>: in a low voice, in confidence. Apache-2.0.</p></footer>
+<footer><nav aria-label="Footer"><a href="https://github.com/getsotto/sotto">GitHub</a><a href="#open-source">Contribute</a><a href="https://github.com/getsotto/sotto/releases">Releases</a><a href="https://github.com/getsotto/sotto/blob/main/THREAT-MODEL.md">Threat model</a><a href="https://github.com/getsotto/sotto/blob/main/SECURITY.md">Security policy</a><a href="https://github.com/getsotto/sotto/blob/main/deploy/README.md">Run your own</a>${statusLink(statusUrl)}<a href="/app">Log in</a></nav><p class="muted">Sotto takes its name from <em>sotto voce</em>: in a low voice, in confidence. Apache-2.0.</p></footer>
 </main>`;
 
 // Tolerates reformatting of the root div (whitespace, extra attributes) but still fails
@@ -171,16 +196,22 @@ sotto share DATABASE_URL     # one-time link for a single secret</code></pre><p>
 const ROOT_PATTERN = /<div\s+id="root"[^>]*>\s*<\/div>/;
 
 function seoPrerenderPlugin(): Plugin {
+  // Captured from the resolved config so the snapshot renders the same configuration the client
+  // bundle will, whether it arrived through the shell or through a `.env` file.
+  let clientEnv: Record<string, string> = {};
   return {
     name: "sotto-seo-prerender",
     apply: "build",
+    configResolved(config) {
+      clientEnv = config.env as Record<string, string>;
+    },
     transformIndexHtml(html) {
       if (!ROOT_PATTERN.test(html)) {
         throw new Error("sotto-seo-prerender: <div id=\"root\"></div> not found in index.html");
       }
       const origin = publicOrigin();
       return html
-        .replace(ROOT_PATTERN, `<div id="root">${SEO_SNAPSHOT}</div>`)
+        .replace(ROOT_PATTERN, `<div id="root">${seoSnapshot(clientEnv.VITE_STATUS_URL)}</div>`)
         .split("__SOTTO_PUBLIC_URL__")
         .join(origin);
     },

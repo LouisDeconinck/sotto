@@ -9,29 +9,106 @@ import type { SecretEntry } from "./vault";
 // Authed requests send the httpOnly session cookie. Same-origin (dev proxy) keeps CSP tight.
 const CREDS: RequestInit = { credentials: "include" };
 
+/**
+ * The server could not be reached at all: the request never got an answer, as opposed to getting
+ * an unwelcome one.
+ *
+ * Worth its own type because in a secrets manager the difference between those two is the whole
+ * question a worried person is asking. The browser's own wording for this is "Failed to fetch",
+ * which reads like the data failed rather than the connection, and someone looking at it has no
+ * way to tell whether the service is down or their vault is broken. Only one of those is
+ * frightening, and it is not the one that is happening.
+ *
+ * The reassurance is about the design, not about their machine. An earlier wording promised
+ * secrets were "still encrypted on your device", which is a claim about a local copy that need
+ * not exist: this fires on a fresh browser before anything has been downloaded. What is always
+ * true is that the server never held anything readable, so that is what it says.
+ */
+export class ServerUnreachableError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Could not reach the server. This is a connection problem and says nothing about your " +
+        "data: Sotto encrypts secrets before they leave your device, so nothing readable is " +
+        "stored anywhere else.",
+    );
+    this.name = "ServerUnreachableError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * `fetch`, with an unreachable server reported as one.
+ *
+ * `fetch` rejects only for network-level failures: an HTTP error, however unwelcome, resolves
+ * normally. So every rejection caught here means no answer arrived rather than a bad one, and
+ * the distinction needs no guessing.
+ *
+ * Deliberately not matched on the message, which is browser-specific and would rot: Chrome says
+ * "Failed to fetch", Firefox "NetworkError when attempting to fetch resource", Node "fetch
+ * failed". The type is the contract; the wording is not.
+ */
+/**
+ * Read a response body, reporting a connection that died mid-answer as unreachable too.
+ *
+ * `request` below only covers the part up to the headers. A connection dropped after them
+ * rejects here instead, in `json()` or `text()`, and would otherwise reach the user as the same
+ * raw browser wording the wrapper exists to replace. The failure is identical from where they
+ * are sitting, so the message should be as well.
+ */
+async function readBody<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw cause;
+    }
+    // A body that is present but malformed is the server misbehaving rather than the network,
+    // and mislabelling it would send somebody to check their wifi over a server bug.
+    if (cause instanceof SyntaxError) {
+      throw new Error("The server sent a response this app could not read.");
+    }
+    throw new ServerUnreachableError(cause);
+  }
+}
+
+async function request(path: string, init: RequestInit = CREDS): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (cause) {
+    // An abort is the caller's own doing and already means something to them; only a genuine
+    // network failure gets rewritten. Matched on the name alone: browsers reject with a
+    // DOMException, but a polyfilled or cross-realm signal need not, and narrowing to that type
+    // would relabel a deliberate cancellation as the server being unreachable.
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw cause;
+    }
+    throw new ServerUnreachableError(cause);
+  }
+}
+
 async function authedJson<T>(path: string): Promise<T> {
-  const resp = await fetch(path, CREDS);
+  const resp = await request(path, CREDS);
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  return (await resp.json()) as T;
+  return (await readBody(() => resp.json())) as T;
 }
 
 /// The current session's user, or `null` if not logged in.
 export async function me(): Promise<{ userId: string } | null> {
-  const resp = await fetch("/auth/me", CREDS);
+  const resp = await request("/auth/me", CREDS);
   if (resp.status === 401) {
     return null;
   }
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { user_id: string };
+  const body = (await readBody(() => resp.json())) as { user_id: string };
   return { userId: body.user_id };
 }
 
 export async function logout(): Promise<void> {
-  const resp = await fetch("/auth/logout", { method: "POST", ...CREDS });
+  const resp = await request("/auth/logout", { method: "POST", ...CREDS });
   if (!resp.ok) {
     // The session cookie is httpOnly, so only the server can clear it; report failure rather than
     // letting callers assume the session is gone.
@@ -49,14 +126,14 @@ export interface Account {
 
 /// The account's KDF salt + master-sealed private keys, or `null` if the account isn't set up.
 export async function fetchAccount(): Promise<Account | null> {
-  const resp = await fetch("/account", CREDS);
+  const resp = await request("/account", CREDS);
   if (resp.status === 404) {
     return null;
   }
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { kdf_params: string; enc_private_keys: string };
+  const body = (await readBody(() => resp.json())) as { kdf_params: string; enc_private_keys: string };
   const kdf = JSON.parse(new TextDecoder().decode(standardB64ToBytes(body.kdf_params))) as {
     salt: number[];
   };
@@ -105,14 +182,14 @@ export async function fetchEnvironments(projectId: string): Promise<Environment[
 /// The caller's own vault-key grant for an environment, or `null` if they have none (access
 /// without a key: the org lets them see ciphertext, but nobody granted them the vault key).
 export async function fetchMyGrant(envId: string): Promise<Uint8Array | null> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/grant`, CREDS);
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/grant`, CREDS);
   if (resp.status === 404) {
     return null;
   }
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { enc_vault_key: string };
+  const body = (await readBody(() => resp.json())) as { enc_vault_key: string };
   return standardB64ToBytes(body.enc_vault_key);
 }
 
@@ -197,21 +274,21 @@ function deletionResponseError(resp: Response, fallback: string): Error {
 export async function fetchOrganisationDeletionStatus(
   orgId: string,
 ): Promise<OrganisationDeletionStatus | null> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion`, CREDS);
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion`, CREDS);
   if (resp.status === 404) {
     return null;
   }
   if (!resp.ok) {
     throw deletionResponseError(resp, "The deletion status could not be loaded. Try again.");
   }
-  return parseOrganisationDeletionStatus(await resp.json());
+  return parseOrganisationDeletionStatus(await readBody(() => resp.json()));
 }
 
 /// Submit the exact-id and subscription-cancellation confirmation for an organisation.
 export async function requestOrganisationDeletion(
   orgId: string,
 ): Promise<OrganisationDeletionStatus> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -223,21 +300,21 @@ export async function requestOrganisationDeletion(
   if (!resp.ok) {
     throw deletionResponseError(resp, "The deletion request could not be completed. Try again.");
   }
-  return parseOrganisationDeletionStatus(await resp.json());
+  return parseOrganisationDeletionStatus(await readBody(() => resp.json()));
 }
 
 /// Ask an owner to recover an active deletion before purge begins.
 export async function cancelOrganisationDeletion(
   orgId: string,
 ): Promise<OrganisationDeletionStatus> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/deletion/cancel`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/deletion/cancel`, {
     method: "POST",
     ...CREDS,
   });
   if (!resp.ok) {
     throw deletionResponseError(resp, "The deletion could not be cancelled. Try again.");
   }
-  return parseOrganisationDeletionStatus(await resp.json());
+  return parseOrganisationDeletionStatus(await readBody(() => resp.json()));
 }
 
 export interface Entitlements {
@@ -272,7 +349,7 @@ export async function fetchEntitlements(orgId: string): Promise<Entitlements> {
 /// Start a Team subscription checkout (admin/owner); returns the Stripe Checkout page URL for the
 /// browser to navigate to. The tier itself flips when the webhook confirms payment.
 export async function createCheckout(orgId: string): Promise<string> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/billing/checkout`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/billing/checkout`, {
     method: "POST",
     ...CREDS,
   });
@@ -285,14 +362,14 @@ export async function createCheckout(orgId: string): Promise<string> {
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { url: string };
+  const body = (await readBody(() => resp.json())) as { url: string };
   return body.url;
 }
 
 /// Open Stripe's customer portal (admin/owner) to manage or cancel the subscription; returns the
 /// portal URL for the browser to navigate to.
 export async function createPortal(orgId: string): Promise<string> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/billing/portal`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/billing/portal`, {
     method: "POST",
     ...CREDS,
   });
@@ -308,7 +385,7 @@ export async function createPortal(orgId: string): Promise<string> {
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { url: string };
+  const body = (await readBody(() => resp.json())) as { url: string };
   return body.url;
 }
 
@@ -352,7 +429,7 @@ export async function grantOrgKey(
   userId: string,
   encOrgKey: Uint8Array,
 ): Promise<void> {
-  const resp = await fetch(
+  const resp = await request(
     `/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}/org-key`,
     {
       method: "POST",
@@ -392,7 +469,7 @@ export interface InvitedMember {
 
 /// Invite an existing Sotto user into an org by email.
 export async function inviteMember(orgId: string, email: string): Promise<InvitedMember> {
-  const resp = await fetch(`/orgs/${encodeURIComponent(orgId)}/invites`, {
+  const resp = await request(`/orgs/${encodeURIComponent(orgId)}/invites`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email }),
@@ -407,7 +484,7 @@ export async function inviteMember(orgId: string, email: string): Promise<Invite
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { user_id: string; public_key: string | null };
+  const body = (await readBody(() => resp.json())) as { user_id: string; public_key: string | null };
   return {
     userId: body.user_id,
     publicKey: body.public_key ? standardB64ToBytes(body.public_key) : null,
@@ -420,7 +497,7 @@ export async function createGrant(
   userId: string,
   encVaultKey: Uint8Array,
 ): Promise<void> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/grants`, {
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/grants`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ user_id: userId, enc_vault_key: bytesToStandardB64(encVaultKey) }),
@@ -523,7 +600,7 @@ export interface RotatePayload {
 
 /// Apply a key rotation (rewrapped keys + the replacement grant set) at a base revision.
 export async function postRotate(envId: string, payload: RotatePayload): Promise<void> {
-  const resp = await fetch(`/environments/${encodeURIComponent(envId)}/rotate`, {
+  const resp = await request(`/environments/${encodeURIComponent(envId)}/rotate`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -561,7 +638,7 @@ export async function postRotate(envId: string, payload: RotatePayload): Promise
 
 /// Create a share link (session required); returns the public token.
 export async function createShare(encBlob: Uint8Array, maxViews: number): Promise<string> {
-  const resp = await fetch("/shares", {
+  const resp = await request("/shares", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ enc_blob: bytesToStandardB64(encBlob), max_views: maxViews }),
@@ -570,7 +647,7 @@ export async function createShare(encBlob: Uint8Array, maxViews: number): Promis
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as { token: string };
+  const body = (await readBody(() => resp.json())) as { token: string };
   return body.token;
 }
 
@@ -588,7 +665,7 @@ interface ShareResponse {
 }
 
 export async function fetchShare(token: string): Promise<Share> {
-  const resp = await fetch(`/shares/${encodeURIComponent(token)}`);
+  const resp = await request(`/shares/${encodeURIComponent(token)}`);
   if (resp.status === 404) {
     throw new ShareUnavailable(
       "This link is invalid, expired, revoked, or has already been viewed.",
@@ -597,7 +674,7 @@ export async function fetchShare(token: string): Promise<Share> {
   if (!resp.ok) {
     throw new Error(`server error (${resp.status})`);
   }
-  const body = (await resp.json()) as ShareResponse;
+  const body = (await readBody(() => resp.json())) as ShareResponse;
   return {
     encBlob: standardB64ToBytes(body.enc_blob),
     passphraseSalt: body.passphrase_salt ? standardB64ToBytes(body.passphrase_salt) : null,
@@ -622,11 +699,11 @@ export interface Community {
 /// the server cannot reach GitHub and has nothing cached - the page then hides the counts.
 export async function fetchCommunity(): Promise<Community | null> {
   try {
-    const resp = await fetch("/community");
+    const resp = await request("/community");
     if (!resp.ok) {
       return null;
     }
-    const body = (await resp.json()) as {
+    const body = (await readBody(() => resp.json())) as {
       stars: number;
       forks: number;
       repo_url: string;

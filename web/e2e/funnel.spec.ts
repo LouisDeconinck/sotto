@@ -12,6 +12,49 @@ import {
 // e2e/README.md for how to run it locally. Asserts on observable UI state only - text, URL,
 // visible elements - never component internals.
 
+// An unreachable server must say so in words a worried person can act on. The browser's own
+// "Failed to fetch" reads like the data failed rather than the connection, which in a secrets
+// manager is the difference between an inconvenience and a catastrophe.
+test("an unreachable server says so, rather than showing the browser's wording", async ({
+  page,
+}) => {
+  // Fail the request at the network layer, which is what a stopped server looks like from here.
+  // An HTTP error would not do: fetch resolves for those, and it is the rejection path being
+  // tested.
+  await page.route("**/auth/me", (route) => route.abort("connectionrefused"));
+
+  await page.goto("/app");
+
+  await expect(page.getByText(/could not reach the server/i)).toBeVisible();
+  await expect(page.getByText(/says nothing about your data/i)).toBeVisible();
+  await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
+});
+
+test("a body the app cannot read is not blamed on the network", async ({ page }) => {
+  // Headers arrive and the body is nonsense. `fetch` has already resolved by then, so this
+  // rejects in the body read rather than in the request, which is the half the wrapper was
+  // extended to cover.
+  //
+  // It asserts the *other* branch of that wrapper, deliberately. A body that is present but
+  // malformed is the server misbehaving, and telling somebody their connection failed would
+  // send them to check their wifi over a server bug. A genuine mid-stream disconnect takes the
+  // same wrapper and reports as unreachable; Playwright's routing cannot cut a response short
+  // once it has begun, so that half is not reachable from here.
+  await page.route("**/auth/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: '{"user_id": "trunc',
+    });
+  });
+
+  await page.goto("/app");
+
+  await expect(page.getByText(/could not read/i)).toBeVisible();
+  await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
+  await expect(page.getByText(/unexpected end of json/i)).toHaveCount(0);
+});
+
 test("login, unlock, invite, and checkout", async ({ page }) => {
   await loginAndUnlock(page);
 
@@ -150,4 +193,27 @@ test.describe("landing page prerender (no scripting)", () => {
     // Discovery metadata ships in the static head.
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /.+\/$/);
   });
+
+  test("a configured status link reaches the snapshot, not just the React footer", async ({
+    page,
+  }) => {
+    // The snapshot must stay text-identical to what <Landing> renders for the same content, so
+    // a link that only one of them carries is cloaking, not a missing feature. It agrees
+    // trivially when the variable is unset, which is why the e2e build sets it.
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: "Status" })).toHaveAttribute(
+      "href",
+      "https://status.example.test",
+    );
+  });
+});
+
+test("the status link survives React replacing the snapshot", async ({ page }) => {
+  // Scripting on: React discards the prerendered markup and renders its own. Both paths have to
+  // end up in the same place, which is the whole point of the snapshot contract.
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "Status" })).toHaveAttribute(
+    "href",
+    "https://status.example.test",
+  );
 });
