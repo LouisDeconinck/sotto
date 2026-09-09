@@ -657,6 +657,12 @@ If you want a denser uptime record than this, the external checker that watches
 
 ### Setup
 
+**In a fork, change the guard first.** The build job carries
+`if: github.repository == 'getsotto/sotto'`, so a fork publishes nothing and does so silently.
+That guard exists because a fork inherits the schedule and would otherwise rebuild a page about
+somebody else's deployment; change the name to your own repository, or drop the line. The same
+applies to the collector, which the page reads from.
+
 1. **Enable Pages**: repository settings, Pages, source **GitHub Actions**.
 2. **Point the DNS**: a `CNAME` from `status.<your domain>` to `<owner>.github.io`, then set the
    custom domain in the same settings page and wait for the certificate.
