@@ -116,19 +116,29 @@ class Uptime(unittest.TestCase):
 
 class Incidents(unittest.TestCase):
     def test_the_stage_comes_from_the_labels(self):
-        issue = {"title": "Sync is slow", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
+        issue = {"title": "Sync is slow", "state": "OPEN", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [{"name": "incident"}, {"name": "identified"}], "comments": []}
         self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "identified")
+
+    def test_the_state_is_read_however_github_spells_it(self):
+        # `gh --json state` emits CLOSED; the REST API emits closed. Matching one of them
+        # exactly is a silent failure in the worst direction, publishing a resolved incident as
+        # still happening and keeping it on the page for ever.
+        for spelling in ("CLOSED", "closed"):
+            with self.subTest(spelling=spelling):
+                issue = {"title": "Done", "state": spelling, "labels": [], "comments": [],
+                         "createdAt": "2026-09-08T10:00:00Z"}
+                self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "resolved")
 
     def test_closing_the_issue_resolves_it_whatever_the_labels_say(self):
         # Otherwise an incident closed without tidying its labels would sit on the page
         # claiming to be under investigation for ever.
-        issue = {"title": "Outage", "state": "closed", "createdAt": "2026-09-01T10:00:00Z",
+        issue = {"title": "Outage", "state": "CLOSED", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [{"name": "investigating"}], "comments": []}
         self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "resolved")
 
     def test_comments_become_the_updates_in_order(self):
-        issue = {"title": "Outage", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
+        issue = {"title": "Outage", "state": "OPEN", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [], "comments": [
                      {"createdAt": "2026-09-01T10:30:00Z", "body": "Looking into it"},
                      {"createdAt": "2026-09-01T11:00:00Z", "body": "Fixed"}]}
@@ -149,7 +159,7 @@ class Incidents(unittest.TestCase):
                          ["Evening", "Morning", "Yesterday"])
 
     def test_updates_are_ordered_however_the_api_returned_them(self):
-        issue = {"title": "Outage", "state": "open", "createdAt": "2026-09-01T10:00:00Z",
+        issue = {"title": "Outage", "state": "OPEN", "createdAt": "2026-09-01T10:00:00Z",
                  "labels": [], "comments": [
                      {"createdAt": "2026-09-01T12:00:00Z", "body": "Resolved"},
                      {"createdAt": "2026-09-01T10:30:00Z", "body": "Looking into it"}]}
@@ -159,14 +169,14 @@ class Incidents(unittest.TestCase):
     def test_a_resolved_label_does_not_resolve_an_open_incident(self):
         # Closing the issue is what resolves an incident. Reading it from a label would let a
         # stale one publish an outage as over while it was still happening.
-        issue = {"title": "Ongoing", "state": "open", "createdAt": "2026-09-08T10:00:00Z",
+        issue = {"title": "Ongoing", "state": "OPEN", "createdAt": "2026-09-08T10:00:00Z",
                  "labels": [{"name": "resolved"}], "comments": []}
         self.assertEqual(page.parse_incidents([issue], TODAY)[0]["stage"], "investigating")
 
     def test_an_incident_resolved_inside_the_window_is_kept(self):
         # It opened before the window and ended inside it, which is precisely the shape of a
         # long outage. The bars will be showing those days; the log has to explain them.
-        long_one = {"title": "Long outage", "state": "closed", "labels": [], "comments": [],
+        long_one = {"title": "Long outage", "state": "CLOSED", "labels": [], "comments": [],
                     "createdAt": "2026-05-01T00:00:00Z", "closedAt": "2026-09-05T00:00:00Z"}
         titles = [i["title"] for i in page.parse_incidents([long_one], TODAY)]
         self.assertEqual(titles, ["Long outage"])
@@ -175,9 +185,9 @@ class Incidents(unittest.TestCase):
         # The bars cover ninety days, so the log does too. The exception is the one that
         # matters: ageing out an incident that is still happening would be the worst thing
         # this page could do.
-        stale = {"title": "Long resolved", "state": "closed", "labels": [], "comments": [],
+        stale = {"title": "Long resolved", "state": "CLOSED", "labels": [], "comments": [],
                  "createdAt": "2025-01-01T00:00:00Z", "closedAt": "2025-01-02T00:00:00Z"}
-        ancient_open = {"title": "Still open", "state": "open", "labels": [], "comments": [],
+        ancient_open = {"title": "Still open", "state": "OPEN", "labels": [], "comments": [],
                         "createdAt": "2025-01-01T00:00:00Z"}
         titles = [i["title"] for i in page.parse_incidents([stale, ancient_open], TODAY)]
         self.assertEqual(titles, ["Still open"])
@@ -226,7 +236,7 @@ class Rendering(unittest.TestCase):
         # window and are all displayed anyway, because they were resolved inside it, so a
         # judgement based on opening dates would have called a truncated list complete.
         issues = [{"createdAt": "2025-01-01T00:00:00Z", "closedAt": "2026-09-05T00:00:00Z",
-                   "state": "closed", "labels": [], "comments": [], "title": "x"}] * 6
+                   "state": "CLOSED", "labels": [], "comments": [], "title": "x"}] * 6
         self.assertEqual(len(page.parse_incidents(issues, TODAY)), 6, "all of them display")
         self.assertTrue(page.possibly_truncated(issues, 5))
 

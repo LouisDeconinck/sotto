@@ -114,7 +114,10 @@ def parse_incidents(issues: list[dict], today: dt.date, span: int = SPAN_DAYS) -
     horizon = (today - dt.timedelta(days=span - 1)).isoformat()
     incidents = []
     for issue in issues:
-        closed = issue.get("state") == "closed"
+        # `gh` spells this CLOSED and the REST API spells it closed, and comparing against one
+        # of them silently gets the other wrong in the worst direction: a resolved incident
+        # renders as still under investigation and never ages out of the log.
+        closed = str(issue.get("state", "")).lower() == "closed"
         # Kept if anything about it happened inside the window: it opened here, or it ended
         # here. A long outage that began before the window and was resolved inside it is
         # exactly the kind the bars will be showing, and dropping it on its opening date alone
