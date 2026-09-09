@@ -820,6 +820,26 @@ this write-capable operational control.
 Both endpoints are independent of the deletion flags: configuring either token does not enable
 deletion, and neither is enabled by turning deletion on.
 
+### Rotating them
+
+`./rotate-deletion-tokens.sh`, run from this directory on the host. It replaces both, restarts
+the server with `up -d` rather than `restart` (which reuses the old environment and would leave
+the previous tokens live while `.env` claimed otherwise), and then proves the rotation took.
+
+Both go together because they are one blast radius: they live two lines apart in the same file,
+so an exposure that reached one plausibly reached the other.
+
+The proof is the part worth having. It checks that the new token is accepted **and that the old
+one is now refused**, because without that second half a no-op edit and a real rotation look
+identical from outside. If any check fails it says so, leaves the previous `.env` beside the new
+one, and tells you the two commands to go back.
+
+No token is printed at any point, not even the new one. The values are written to `.env` and
+read back from there for the checks, because a rotation that shows you the replacement on the
+way past has published it to whatever is recording the session. Delete the backup file once you
+are satisfied: it still holds the old tokens, and a rotation that leaves them on disk has moved
+them rather than retired them.
+
 ## Enabling organisation deletion
 
 Deletion is irreversible once purge begins, so treat enablement as a release of its own. Work
