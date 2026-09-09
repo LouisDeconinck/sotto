@@ -417,6 +417,12 @@ supposed to be the thing that catches everything else, so it is the worst place 
 take on trust. Until each URL is set, the workflows say on their own logs that nothing is watching
 them, which is honest and no substitute.
 
+**In a fork, change the repository guards before doing this.** All three workflows carry
+`if: github.repository == 'getsotto/sotto'`, so a dispatch in a fork succeeds, skips the job and
+sends nothing. The run goes green and the heartbeat never arrives, which reads exactly like a
+broken heartbeat and is not one. Point each guard at your own repository, or drop the line; it is
+there so a fork does not start probing somebody else's deployment merely by existing.
+
 ## Restore verification
 
 A backup nobody has restored is a hope. `backup.sh` validates each archive with
