@@ -385,9 +385,15 @@ this section exists.
 
 ### Setting it up
 
-1. Create the account and the two HTTP monitors above. Confirm alerts go somewhere you will
-   actually see: an email address you read, or the checker's mobile app. Avoid SMS or voice if the
-   provider charges for them separately, since that is the one way this arrangement costs money.
+1. Create the account and the first two monitors. The web app one is a plain HTTP check; the API
+   one must be a **keyword** check matching `ok`, and the difference is not cosmetic. A plain HTTP
+   check passes on any `200`, including the single-page app answering because the deployment has
+   no route for `/health/ready`, which is a real state this deployment has been in. The keyword is
+   what tells the readiness endpoint apart from the page that replaced it.
+
+   Confirm alerts go somewhere you will actually see: an email address you read, or the checker's
+   mobile app. Avoid SMS or voice if the provider charges for them separately, since that is the
+   one way this arrangement costs money.
 2. Create the three heartbeat monitors and copy their ping URLs.
 3. Set them as repository secrets, which is where the workflows read them from:
 
