@@ -168,4 +168,27 @@ test.describe("landing page prerender (no scripting)", () => {
     // Discovery metadata ships in the static head.
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /.+\/$/);
   });
+
+  test("a configured status link reaches the snapshot, not just the React footer", async ({
+    page,
+  }) => {
+    // The snapshot must stay text-identical to what <Landing> renders for the same content, so
+    // a link that only one of them carries is cloaking, not a missing feature. It agrees
+    // trivially when the variable is unset, which is why the e2e build sets it.
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: "Status" })).toHaveAttribute(
+      "href",
+      "https://status.example.test",
+    );
+  });
+});
+
+test("the status link survives React replacing the snapshot", async ({ page }) => {
+  // Scripting on: React discards the prerendered markup and renders its own. Both paths have to
+  // end up in the same place, which is the whole point of the snapshot contract.
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "Status" })).toHaveAttribute(
+    "href",
+    "https://status.example.test",
+  );
 });
