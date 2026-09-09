@@ -30,23 +30,29 @@ test("an unreachable server says so, rather than showing the browser's wording",
   await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
 });
 
-test("a connection that dies mid-answer says the same thing", async ({ page }) => {
-  // Headers arrive, then the body does not. `fetch` has already resolved by then, so this
-  // rejects in the body read rather than in the request, and would otherwise reach the user as
-  // the raw browser wording the wrapper exists to replace. Indistinguishable from where they
-  // are sitting, so the message should be too.
+test("a body the app cannot read is not blamed on the network", async ({ page }) => {
+  // Headers arrive and the body is nonsense. `fetch` has already resolved by then, so this
+  // rejects in the body read rather than in the request, which is the half the wrapper was
+  // extended to cover.
+  //
+  // It asserts the *other* branch of that wrapper, deliberately. A body that is present but
+  // malformed is the server misbehaving, and telling somebody their connection failed would
+  // send them to check their wifi over a server bug. A genuine mid-stream disconnect takes the
+  // same wrapper and reports as unreachable; Playwright's routing cannot cut a response short
+  // once it has begun, so that half is not reachable from here.
   await page.route("**/auth/me", async (route) => {
     await route.fulfill({
       status: 200,
-      headers: { "content-type": "application/json", "content-length": "999" },
+      headers: { "content-type": "application/json" },
       body: '{"user_id": "trunc',
     });
   });
 
   await page.goto("/app");
 
-  await expect(page.getByText(/could not reach the server/i)).toBeVisible();
+  await expect(page.getByText(/could not read/i)).toBeVisible();
   await expect(page.getByText(/failed to fetch/i)).toHaveCount(0);
+  await expect(page.getByText(/unexpected end of json/i)).toHaveCount(0);
 });
 
 test("login, unlock, invite, and checkout", async ({ page }) => {
