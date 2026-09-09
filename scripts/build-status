@@ -46,6 +46,19 @@ def overall(components: list[dict]) -> tuple[str, str]:
     return MAJOR if len(down) == len(measured) else PARTIAL
 
 
+def within_window(days: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
+    """The days the page can actually show.
+
+    Everything derived from the history has to agree on this. The collector trims against its
+    own clock, so a page built later inherits days that have since fallen out of its window;
+    left alone, the bars drop them and the percentage keeps counting them, and a component with
+    one green bar reports nine per cent. Whatever a reader can see has to be what the number
+    was made from.
+    """
+    horizon = (today - dt.timedelta(days=span - 1)).isoformat()
+    return [d for d in days if d["date"] >= horizon]
+
+
 def day_slots(days: list[dict], today: dt.date, span: int = SPAN_DAYS) -> list[dict]:
     """One slot per day across the window, oldest first.
 
@@ -172,7 +185,7 @@ def build(summary: dict, issues: list[dict], today: dt.date, truncated: bool = F
     banner, tone = overall(components)
     rows = []
     for component in components:
-        days = component.get("days", [])
+        days = within_window(component.get("days", []), today)
         rows.append({
             "name": component.get("name") or component.get("id") or "Unnamed",
             "description": component.get("description", ""),

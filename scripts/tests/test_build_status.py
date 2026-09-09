@@ -85,6 +85,19 @@ class Uptime(unittest.TestCase):
         self.assertEqual((up["ok"], up["total"]), (3, 4))
         self.assertAlmostEqual(up["percent"], 75.0)
 
+    def test_the_percentage_counts_only_what_the_bars_can_show(self):
+        # Ten failures from outside the window and one success inside it. The bars can draw
+        # exactly one day, so a percentage built from eleven checks describes a chart nobody
+        # is looking at, and describes it as an outage.
+        days = [{"date": "2026-01-01", "ok": 0, "total": 10},
+                {"date": "2026-09-09", "ok": 1, "total": 1}]
+        model = page.build({"generated_at": "x",
+                            "components": [{"id": "a", "name": "A", "state": "ok",
+                                            "days": days}]}, [], TODAY)
+        row = model["rows"][0]
+        self.assertEqual(row["uptime"], {"ok": 1, "total": 1, "percent": 100.0})
+        self.assertEqual(len([s for s in row["slots"] if s["tally"]]), 1)
+
     def test_no_checks_is_not_zero_percent(self):
         # Zero would read as a total outage. There is simply nothing to report.
         self.assertIsNone(page.uptime([]))
