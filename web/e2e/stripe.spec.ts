@@ -23,6 +23,16 @@ async function fillOptional(
   }
 }
 
+// A fresh address every run, because Link remembers them. Checkout offers Link to an email it
+// has seen before, and that offer is a verification modal covering the form: the submit button
+// is still there, and nothing can reach it. The failure reads as a missing button, which sends
+// you looking at Stripe's copy rather than at an overlay.
+//
+// `.test` is reserved by RFC 2606 and can never be a real domain, so these never leave Stripe.
+function unseenEmail(): string {
+  return `e2e-stripe-${Date.now()}-${Math.floor(Math.random() * 1e6)}@sotto.test`;
+}
+
 test("real Stripe Checkout completes and applies the Team tier", async ({ page }) => {
   await loginAndUnlock(page);
   await selectOwnerOrganisation(page);
@@ -38,7 +48,7 @@ test("real Stripe Checkout completes and applies the Team tier", async ({ page }
     page.locator('input[name="cardNumber"], input[autocomplete="cc-number"]').first(),
   ).toBeVisible({ timeout: 60_000 });
 
-  await fillOptional(page, 'input[name="email"], input[type="email"]', "e2e-stripe@sotto.test");
+  await fillOptional(page, 'input[name="email"], input[type="email"]', unseenEmail());
   await page
     .locator('input[name="cardNumber"], input[autocomplete="cc-number"]')
     .first()
@@ -54,6 +64,15 @@ test("real Stripe Checkout completes and applies the Team tier", async ({ page }
   await fillOptional(page, 'input[name="billingName"]', "Sotto E2E");
   await fillOptional(page, 'input[name="billingPostalCode"]', "94107");
   await fillOptional(page, 'input[name="phoneNumber"], input[autocomplete="tel"]', "4155552671");
+
+  // Belt and braces for the same overlay. A new address should never be offered Link, but
+  // Checkout decides that at its end and this test has already spent five weeks red; dismissing
+  // a prompt that is usually absent costs one call, and not dismissing it costs a two minute
+  // timeout and a failure that names the wrong thing.
+  const linkPrompt = page.getByRole("button", { name: /^close$/i });
+  if (await linkPrompt.isVisible().catch(() => false)) {
+    await linkPrompt.click();
+  }
 
   await page.getByRole("button", { name: /Pay|Subscribe|Start trial/i }).click();
   await page.waitForURL(/billing=success/, { timeout: 60_000 });
