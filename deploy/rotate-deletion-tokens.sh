@@ -87,6 +87,23 @@ if [ "$healthy" != yes ]; then
   exit 1
 fi
 
+# Header files, so a token is never an argument to anything. argv is world readable: `ps` on a
+# shared host hands the bearer token to any local user for as long as the request runs, which
+# would be a poor way to end a script whose whole purpose is retiring exposed tokens. Removed as
+# soon as each request finishes, and on the way out if something goes wrong first.
+cleanup_headers() { rm -f ./.sotto-rotate-hdr.* 2>/dev/null || true; }
+trap cleanup_headers EXIT
+
+with_token() {
+  local token="$1" code hdr
+  shift
+  hdr="$(umask 077 && mktemp ./.sotto-rotate-hdr.XXXXXX)"
+  printf 'Authorization: Bearer %s\n' "$token" > "$hdr"
+  code="$(status -H "@$hdr" "$@")"
+  rm -f "$hdr"
+  printf '%s' "$code"
+}
+
 status() {
   # Prints a status code and nothing else, so a token used here cannot reach the output.
   #
@@ -117,20 +134,18 @@ check() {
 
 echo "checking:"
 # The new token works, which proves the server actually reloaded rather than merely restarting.
-check "metrics accepts the new token" 200 \
-  "$(status -H "Authorization: Bearer ${new_metrics}" "$metrics_url")"
+check "metrics accepts the new token" 200 "$(with_token "$new_metrics" "$metrics_url")"
 # The old one does not, which is the only evidence that rotation happened at all. Without this a
 # no-op edit and a successful rotation look identical.
-check "metrics rejects the old token" 401 \
-  "$(status -H "Authorization: Bearer ${old_metrics}" "$metrics_url")"
+check "metrics rejects the old token" 401 "$(with_token "$old_metrics" "$metrics_url")"
 check "metrics rejects no token" 401 "$(status "$metrics_url")"
 check "operator rejects the old token" 401 \
-  "$(status -X POST -H "Authorization: Bearer ${old_operator}" \
-      -H 'content-type: application/json' -d '{}' "$observation_url")"
+  "$(with_token "$old_operator" -X POST -H 'content-type: application/json' -d '{}' \
+      "$observation_url")"
 # Anything but 401 means the new token got past the bearer check; the request itself is expected
 # to fail afterwards, because `rotation-check` is not an organisation.
-operator_new="$(status -X POST -H "Authorization: Bearer ${new_operator}" \
-  -H 'content-type: application/json' -d '{}' "$observation_url")"
+operator_new="$(with_token "$new_operator" -X POST -H 'content-type: application/json' \
+  -d '{}' "$observation_url")"
 if [ "$operator_new" = "401" ]; then
   echo "  FAIL  operator accepts the new token: got 401" >&2
   failures=$((failures + 1))

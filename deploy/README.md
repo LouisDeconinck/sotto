@@ -834,6 +834,11 @@ one is now refused**, because without that second half a no-op edit and a real r
 identical from outside. If any check fails it says so, leaves the previous `.env` beside the new
 one, and tells you the two commands to go back.
 
+No token is passed as an argument either, which is a different exposure from printing one:
+argv is world readable, so `ps` on a shared host would hand the bearer token to any local user
+for as long as a check runs. Each request reads its `Authorization` header from a file at mode
+600, removed immediately afterwards and on the way out if something fails first.
+
 No token is printed at any point, not even the new one. The values are written to `.env` and
 read back from there for the checks, because a rotation that shows you the replacement on the
 way past has published it to whatever is recording the session. Delete the backup file once you
