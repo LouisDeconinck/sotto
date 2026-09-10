@@ -19,6 +19,17 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 METRICS_VAR=SOTTO_ORGANISATION_DELETION_METRICS_TOKEN
 OPERATOR_VAR=SOTTO_ORGANISATION_DELETION_OPERATOR_TOKEN
 
+# Where to reach the deployment. The server publishes no port to the host: compose gives it an
+# address on its own network and Caddy reaches it as `server:8080`, so `127.0.0.1:8080` from the
+# host answers nothing at all. An earlier version of this script checked there and timed out
+# against a server that was running perfectly well.
+#
+# The served origin is used instead, which is also the path a monitor or an operator would use,
+# so a check that passes here is a check that passes for them. Override it for a deployment
+# whose domain is not in .env:
+#
+#     SOTTO_ORIGIN=https://example.test ./rotate-deletion-tokens.sh
+
 # Registered before anything creates a temporary file, which is the only ordering that works:
 # both kinds hold a token. The header files hold one being sent, and the half-written .env holds
 # the fresh one on its way in, so a failure or a kill between writing and moving it would leave
@@ -56,6 +67,18 @@ refuse_duplicates() {
 }
 refuse_duplicates "$METRICS_VAR"
 refuse_duplicates "$OPERATOR_VAR"
+
+origin="${SOTTO_ORIGIN:-}"
+if [ -z "$origin" ]; then
+  domain="$(read_var SOTTO_DOMAIN)"
+  if [ -z "$domain" ]; then
+    echo "cannot tell where this deployment is served: set SOTTO_DOMAIN in .env, or pass" >&2
+    echo "SOTTO_ORIGIN=https://your.domain to this script" >&2
+    exit 1
+  fi
+  origin="https://${domain}"
+fi
+echo "checking against ${origin}"
 
 # Only now that .env has been found sound. Copying first would leave a spare copy of the secrets
 # behind after a run that refused to do anything, which is a poor trade for a file this script
@@ -103,16 +126,19 @@ echo "server restarted with the new environment"
 # Wait for it to answer at all before concluding anything about what it answers, and say so if
 # it never does. Falling through a timed-out wait would run every check against a server that is
 # not listening, turning one clear problem into five confusing ones.
+# Thirty attempts at two seconds, which is a minute of patience for a container restart. Tunable
+# because a slow host may need longer, and because a test that has to sit through the full wait
+# to prove the timeout works is a test nobody will keep running.
 healthy=no
-for _ in $(seq 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:8080/health 2>/dev/null; then
+for _ in $(seq "${SOTTO_ROTATE_HEALTH_ATTEMPTS:-30}"); do
+  if curl -fsS -o /dev/null "${origin}/health" 2>/dev/null; then
     healthy=yes
     break
   fi
   sleep 2
 done
 if [ "$healthy" != yes ]; then
-  echo "the server did not come back within 60 seconds; not verifying anything against it" >&2
+  echo "the server did not come back in time; not verifying anything against it" >&2
   echo "the previous .env is at ${backup}; restore it and run \`${COMPOSE} up -d server\`" >&2
   exit 1
 fi
@@ -143,8 +169,8 @@ status() {
   printf '%s' "${code:-000}"
 }
 
-metrics_url="http://127.0.0.1:8080/ops/organisation-deletion/metrics"
-observation_url="http://127.0.0.1:8080/ops/organisation-deletion/rotation-check/billing-observation"
+metrics_url="${origin}/ops/organisation-deletion/metrics"
+observation_url="${origin}/ops/organisation-deletion/rotation-check/billing-observation"
 new_metrics="$(read_var "$METRICS_VAR")"
 new_operator="$(read_var "$OPERATOR_VAR")"
 
