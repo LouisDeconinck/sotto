@@ -291,6 +291,173 @@ async fn webhook_rejects_missing_and_invalid_signatures() {
     );
 }
 
+#[test]
+fn the_versions_this_deployment_actually_receives_stay_accepted() {
+    // Pinned literally rather than derived, because a test that iterates the constant only ever
+    // proves the constant agrees with itself: delete the live endpoint's version from the list
+    // and every other test here still passes while production silently stops applying payments.
+    //
+    // `2026-06-24.dahlia` is what the live webhook endpoint renders, fixed when the endpoint was
+    // created and not editable afterwards. `2026-08-26.dahlia` is the account default, which is
+    // what a recreated endpoint would inherit. Changing either is a deliberate act; changing this
+    // list without one is the bug.
+    for required in ["2026-06-24.dahlia", "2026-08-26.dahlia"] {
+        assert!(
+            sotto_server::billing::ACCEPTED_WEBHOOK_API_VERSIONS.contains(&required),
+            "{required} is a version this deployment receives; removing it stops billing"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_webhook_at_any_accepted_version_is_acted_on() {
+    // Every version in the list has to work, not just the one the fixtures happen to use.
+    // Stripe pins a webhook endpoint's version when the endpoint is created and will not let it
+    // be edited, so an older deployment's endpoint keeps sending an older version for ever.
+    let Some(pool) = pool_or_skip().await else {
+        return;
+    };
+    for (n, version) in sotto_server::billing::ACCEPTED_WEBHOOK_API_VERSIONS
+        .iter()
+        .enumerate()
+    {
+        let org = format!("billing-org-ver-{n}");
+        let user = format!("billing-user-ver-{n}");
+        seed_user(&pool, &user).await;
+        seed_org(&pool, &org, "free", &user, "owner").await;
+        let app = app(pool.clone(), true);
+
+        let payload = serde_json::json!({
+            "id": format!("evt_version_{n}"),
+            "created": 100,
+            "api_version": version,
+            "type": "checkout.session.completed",
+            "data": { "object": {
+                "client_reference_id": org,
+                "customer": format!("cus_ver_{n}"),
+                "subscription": format!("sub_ver_{n}"),
+            }}
+        })
+        .to_string();
+        let signature = stripe_signature(&payload);
+
+        assert_eq!(
+            post_webhook(&app, &payload, Some(&signature)).await,
+            StatusCode::OK,
+            "version {version} should be accepted"
+        );
+        let (tier, _, _) = org_billing_state(&pool, &org).await;
+        assert_eq!(
+            tier, "team",
+            "version {version} should have applied the tier"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_webhook_at_an_unknown_version_fails_so_stripe_retries() {
+    // The shape of the bug this replaced: answering 200 told Stripe the event was handled, so it
+    // was never resent, and the tier silently never moved. Failing is what buys the retries that
+    // let a version be added to the list and the backlog delivered.
+    let Some(pool) = pool_or_skip().await else {
+        return;
+    };
+    seed_user(&pool, "billing-user-badver").await;
+    seed_org(
+        &pool,
+        "billing-org-badver",
+        "free",
+        "billing-user-badver",
+        "owner",
+    )
+    .await;
+    let app = app(pool.clone(), true);
+
+    let payload = serde_json::json!({
+        "id": "evt_unknown_version",
+        "created": 100,
+        "api_version": "1999-01-01.jurassic",
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "client_reference_id": "billing-org-badver",
+            "customer": "cus_badver",
+            "subscription": "sub_badver",
+        }}
+    })
+    .to_string();
+    let signature = stripe_signature(&payload);
+
+    assert_eq!(
+        post_webhook(&app, &payload, Some(&signature)).await,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "an unreadable version must not be reported as handled"
+    );
+    let (tier, _, _) = org_billing_state(&pool, "billing-org-badver").await;
+    assert_eq!(
+        tier, "free",
+        "and must not have acted on the payload either"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_webhook_is_still_processed_when_its_version_is_added() {
+    // The other half of buying retries: refusing must not mark the event processed, or the
+    // redelivery would be skipped as a duplicate and the retries would be worthless.
+    let Some(pool) = pool_or_skip().await else {
+        return;
+    };
+    seed_user(&pool, "billing-user-retry").await;
+    seed_org(
+        &pool,
+        "billing-org-retry",
+        "free",
+        "billing-user-retry",
+        "owner",
+    )
+    .await;
+    let app = app(pool.clone(), true);
+
+    let refused = serde_json::json!({
+        "id": "evt_retry_same_id",
+        "created": 100,
+        "api_version": "1999-01-01.jurassic",
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "client_reference_id": "billing-org-retry",
+            "customer": "cus_retry",
+            "subscription": "sub_retry",
+        }}
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&app, &refused, Some(&stripe_signature(&refused))).await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    // Stripe redelivers the same event id once the version is one this server knows.
+    let redelivered = serde_json::json!({
+        "id": "evt_retry_same_id",
+        "created": 100,
+        "api_version": STRIPE_API_VERSION,
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "client_reference_id": "billing-org-retry",
+            "customer": "cus_retry",
+            "subscription": "sub_retry",
+        }}
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&app, &redelivered, Some(&stripe_signature(&redelivered))).await,
+        StatusCode::OK
+    );
+    let (tier, _, _) = org_billing_state(&pool, "billing-org-retry").await;
+    assert_eq!(
+        tier, "team",
+        "the redelivery must not be skipped as already processed"
+    );
+}
+
 #[tokio::test]
 async fn checkout_completed_grants_team_and_audits_once() {
     let Some(pool) = pool_or_skip().await else {
@@ -694,7 +861,7 @@ async fn webhooks_cannot_change_deleting_or_deleted_organisations() {
 }
 
 #[tokio::test]
-async fn webhook_api_version_mismatch_is_recorded_and_ignored() {
+async fn webhook_api_version_mismatch_is_recorded_and_refused() {
     let Some(pool) = pool_or_skip().await else {
         return;
     };
@@ -720,14 +887,20 @@ async fn webhook_api_version_mismatch_is_recorded_and_ignored() {
         }}
     })
     .to_string();
+    // Refused rather than accepted. This assertion was the opposite until a version mismatch
+    // dropped twelve days of live webhooks in silence: reporting success to Stripe means the
+    // event is never retried, so a mismatch that could have been fixed in an hour was instead
+    // unrecoverable the moment it arrived.
     assert_eq!(
         post_webhook(&app, &payload, Some(&stripe_signature(&payload))).await,
-        StatusCode::OK
+        StatusCode::INTERNAL_SERVER_ERROR
     );
     assert_eq!(
         org_billing_state(&pool, "billing-org-version").await,
         ("free".into(), None, None)
     );
+    // Recorded, so the receipt shows what arrived, but deliberately not marked processed: the
+    // redelivery has to be allowed to do the work once the version is understood.
     let processed: bool = sqlx::query_scalar(
         "SELECT processed_at IS NOT NULL FROM stripe_webhook_events \
          WHERE event_id = 'evt_version_mismatch'",
@@ -735,11 +908,14 @@ async fn webhook_api_version_mismatch_is_recorded_and_ignored() {
     .fetch_one(&pool)
     .await
     .expect("read mismatched webhook receipt");
-    assert!(processed);
+    assert!(
+        !processed,
+        "a refused event must stay eligible for redelivery"
+    );
 }
 
 #[tokio::test]
-async fn webhook_missing_api_version_is_recorded_and_ignored() {
+async fn webhook_missing_api_version_is_recorded_and_refused() {
     let Some(pool) = pool_or_skip().await else {
         return;
     };
@@ -766,7 +942,7 @@ async fn webhook_missing_api_version_is_recorded_and_ignored() {
     .to_string();
     assert_eq!(
         post_webhook(&app, &payload, Some(&stripe_signature(&payload))).await,
-        StatusCode::OK
+        StatusCode::INTERNAL_SERVER_ERROR
     );
     assert_eq!(
         org_billing_state(&pool, "billing-org-missing-version").await,
@@ -779,7 +955,11 @@ async fn webhook_missing_api_version_is_recorded_and_ignored() {
     .fetch_one(&pool)
     .await
     .expect("read missing-version receipt");
-    assert_eq!(receipt, ("missing".into(), true));
+    assert_eq!(
+        receipt,
+        ("missing".into(), false),
+        "recorded as missing, and left unprocessed so a redelivery can still be acted on"
+    );
 }
 
 #[tokio::test]
