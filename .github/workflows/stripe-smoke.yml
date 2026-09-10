@@ -121,6 +121,19 @@ jobs:
           listener_pid=$!
 
           cleanup() {
+            local status=$?
+            # On the way out of a failed run, say what the webhook actually did. Without this a
+            # failure at the entitlement step is indistinguishable between three causes: the
+            # event never arriving, arriving and being refused on its signature, and arriving
+            # and being accepted while the tier stayed put. `stripe listen` records the forward
+            # and the response code for each event, which separates all three in one line.
+            #
+            # Signing secrets are redacted the same way the extraction step below redacts them.
+            if [ "$status" -ne 0 ] && [ -f "$listener_log" ]; then
+              echo "::group::stripe listen log"
+              sed -E 's/whsec_[A-Za-z0-9_-]+/<redacted>/g' "$listener_log" >&2 || true
+              echo "::endgroup::"
+            fi
             kill "$listener_pid" 2>/dev/null || true
             wait "$listener_pid" 2>/dev/null || true
           }
@@ -154,6 +167,29 @@ jobs:
           printf '::add-mask::%s\n' "$webhook_secret"
           export STRIPE_WEBHOOK_SECRET="$webhook_secret"
           npm run e2e -- --config=playwright.stripe.config.ts
+
+      - name: Confirm the webhook was actually delivered
+        if: always()
+        env:
+          LISTENER_LOG: ${{ runner.temp }}/stripe-listen.log
+        run: |
+          set -euo pipefail
+          # The entitlement assertion in the spec can fail for three unrelated reasons, and they
+          # look identical from the test: the event never arrived, it arrived and was refused on
+          # its signature, or it arrived and was accepted while the tier stayed put. This says
+          # which, in the run that failed, instead of leaving it to be guessed at afterwards.
+          if [ ! -f "$LISTENER_LOG" ]; then
+            echo "no listener log; the forwarder never started" >&2
+            exit 0
+          fi
+          if ! grep -q "checkout.session.completed" "$LISTENER_LOG"; then
+            echo "the checkout.session.completed event was never forwarded to the server" >&2
+          elif grep -qE "\[(4|5)[0-9][0-9]\]" "$LISTENER_LOG"; then
+            echo "the event was forwarded and the server refused it:" >&2
+            grep -E "\[(4|5)[0-9][0-9]\]" "$LISTENER_LOG" >&2 || true
+          else
+            echo "the event was forwarded and accepted, so a failing tier is not a webhook problem"
+          fi
 
       - name: Reject skipped Stripe smoke tests
         working-directory: web
