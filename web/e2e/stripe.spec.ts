@@ -81,6 +81,10 @@ test("real Stripe Checkout completes and applies the Team tier", async ({ page }
 
   // Stripe delivers the entitlement asynchronously through the forwarded webhook. Poll the same
   // authenticated endpoint the TeamPanel uses, then reload once to prove the visible plan agrees.
+  // Returns what it saw rather than whether it liked it. A boolean here reports `false` for a
+  // free tier, a rejected request and a response whose shape changed, which are three different
+  // problems; the last failure cost a round trip establishing which. Playwright prints the last
+  // polled value, so saying it plainly is free.
   await expect
     .poll(
       async () =>
@@ -88,16 +92,16 @@ test("real Stripe Checkout completes and applies the Team tier", async ({ page }
           const response = await fetch(`/orgs/${encodeURIComponent(orgId)}/entitlements`, {
             credentials: "include",
           });
-          if (!response.ok) return `status:${response.status}`;
+          if (!response.ok) return `http ${response.status}`;
           const body = (await response.json()) as {
-            tier: string;
-            effective_tier: string;
+            tier?: string;
+            effective_tier?: string;
           };
-          return body.tier === "team" && body.effective_tier === "team";
+          return `tier=${body.tier ?? "missing"} effective=${body.effective_tier ?? "missing"}`;
         }, fixture.org_id),
       { intervals: [2_000], timeout: 60_000 },
     )
-    .toBe(true);
+    .toBe("tier=team effective=team");
 
   await page.reload();
   await unlockCurrentPage(page);
