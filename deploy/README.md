@@ -822,7 +822,12 @@ deletion, and neither is enabled by turning deletion on.
 
 ### Rotating them
 
-`./rotate-deletion-tokens.sh`, run from this directory on the host. It replaces both, restarts
+`./rotate-deletion-tokens.sh`, run from this directory on the host. It checks itself against the
+deployment's served origin, taken from `SOTTO_DOMAIN` in `.env`, because the server publishes no
+port to the host: compose gives it an address on its own network and Caddy reaches it as
+`server:8080`, so `127.0.0.1:8080` answers nothing. Pass `SOTTO_ORIGIN=https://your.domain` for a
+deployment whose domain is not in `.env`, and `SOTTO_ROTATE_HEALTH_ATTEMPTS` to wait longer than
+a minute for the restart. It replaces both, restarts
 the server with `up -d` rather than `restart` (which reuses the old environment and would leave
 the previous tokens live while `.env` claimed otherwise), and then proves the rotation took.
 
