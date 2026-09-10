@@ -33,18 +33,39 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Keep the old values reachable for the checks below, and keep a file to fall back to. Restrictive
-# mode from the start rather than after the fact: a backup of a secrets file is a secrets file.
+read_var() {
+  # First match only, which is safe because a repeated key is refused outright below. Left in
+  # place regardless: this value goes into an Authorization header, and a multi-line value there
+  # is a second header rather than a wrong token.
+  grep -m1 "^$1=" .env | cut -d= -f2- || true
+}
+
+refuse_duplicates() {
+  local count
+  count="$(grep -c "^$1=" .env || true)"
+  if [ "$count" -gt 1 ]; then
+    # Not tidiness. Compose reads the last occurrence and this script reads the first, so with a
+    # duplicate the "old token is rejected" check would test a value the server never used and
+    # pass without proving anything. An ambiguous secrets file is worth fixing before rotating
+    # the secrets in it.
+    echo "$1 appears ${count} times in .env; remove the duplicates before rotating" >&2
+    echo "the server uses the last occurrence and this script reads the first, so a rotation" >&2
+    echo "here could verify itself against a value that was never live" >&2
+    exit 1
+  fi
+}
+refuse_duplicates "$METRICS_VAR"
+refuse_duplicates "$OPERATOR_VAR"
+
+# Only now that .env has been found sound. Copying first would leave a spare copy of the secrets
+# behind after a run that refused to do anything, which is a poor trade for a file this script
+# then has to tell you to delete.
+#
+# Restrictive mode from the start rather than after the fact: a backup of a secrets file is a
+# secrets file.
 backup=".env.before-rotation-$(date -u +%Y%m%dT%H%M%SZ)"
 (umask 077 && cp .env "$backup")
 echo "previous .env saved as $backup"
-
-read_var() {
-  # First match only. A key repeated in .env would otherwise yield a multi-line value, and this
-  # value goes into an Authorization header: a second line there is a second header, which is
-  # header injection rather than a wrong token.
-  grep -m1 "^$1=" .env | cut -d= -f2- || true
-}
 
 old_metrics="$(read_var "$METRICS_VAR")"
 old_operator="$(read_var "$OPERATOR_VAR")"

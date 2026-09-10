@@ -829,6 +829,11 @@ the previous tokens live while `.env` claimed otherwise), and then proves the ro
 Both go together because they are one blast radius: they live two lines apart in the same file,
 so an exposure that reached one plausibly reached the other.
 
+It refuses to run if either variable appears twice in `.env`. That is not tidiness: compose reads
+the last occurrence and the script reads the first, so a duplicate would let the rotation verify
+itself against a value that was never live. An ambiguous secrets file is worth fixing before
+rotating the secrets in it.
+
 The proof is the part worth having. It checks that the new token is accepted **and that the old
 one is now refused**, because without that second half a no-op edit and a real rotation look
 identical from outside. If any check fails it says so, leaves the previous `.env` beside the new
