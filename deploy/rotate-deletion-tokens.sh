@@ -70,11 +70,22 @@ echo "both tokens replaced"
 $COMPOSE up -d server
 echo "server restarted with the new environment"
 
-# Wait for it to answer at all before concluding anything about what it answers.
+# Wait for it to answer at all before concluding anything about what it answers, and say so if
+# it never does. Falling through a timed-out wait would run every check against a server that is
+# not listening, turning one clear problem into five confusing ones.
+healthy=no
 for _ in $(seq 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:8080/health 2>/dev/null; then break; fi
+  if curl -fsS -o /dev/null http://127.0.0.1:8080/health 2>/dev/null; then
+    healthy=yes
+    break
+  fi
   sleep 2
 done
+if [ "$healthy" != yes ]; then
+  echo "the server did not come back within 60 seconds; not verifying anything against it" >&2
+  echo "the previous .env is at ${backup}; restore it and run \`${COMPOSE} up -d server\`" >&2
+  exit 1
+fi
 
 status() {
   # Prints a status code and nothing else, so a token used here cannot reach the output.
