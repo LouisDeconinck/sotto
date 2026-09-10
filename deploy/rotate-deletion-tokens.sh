@@ -31,7 +31,10 @@ backup=".env.before-rotation-$(date -u +%Y%m%dT%H%M%SZ)"
 echo "previous .env saved as $backup"
 
 read_var() {
-  grep "^$1=" .env | cut -d= -f2- || true
+  # First match only. A key repeated in .env would otherwise yield a multi-line value, and this
+  # value goes into an Authorization header: a second line there is a second header, which is
+  # header injection rather than a wrong token.
+  grep -m1 "^$1=" .env | cut -d= -f2- || true
 }
 
 old_metrics="$(read_var "$METRICS_VAR")"
