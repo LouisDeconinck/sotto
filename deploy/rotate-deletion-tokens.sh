@@ -152,12 +152,21 @@ check "operator rejects the old token" 401 \
 # to fail afterwards, because `rotation-check` is not an organisation.
 operator_new="$(with_token "$new_operator" -X POST -H 'content-type: application/json' \
   -d '{}' "$observation_url")"
-if [ "$operator_new" = "401" ]; then
-  echo "  FAIL  operator accepts the new token: got 401" >&2
-  failures=$((failures + 1))
-else
-  echo "  ok    operator accepts the new token (${operator_new}, past the bearer check)"
-fi
+case "$operator_new" in
+  401)
+    echo "  FAIL  operator accepts the new token: refused it (401)" >&2
+    failures=$((failures + 1))
+    ;;
+  000)
+    # No answer is not acceptance. Reading it as one turned a dead server into a tick, which is
+    # the only kind of check worth nothing at all.
+    echo "  FAIL  operator accepts the new token: no answer from the server (000)" >&2
+    failures=$((failures + 1))
+    ;;
+  *)
+    echo "  ok    operator accepts the new token (${operator_new}, past the bearer check)"
+    ;;
+esac
 
 unset new_metrics new_operator old_metrics old_operator
 
