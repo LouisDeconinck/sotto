@@ -19,6 +19,15 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 METRICS_VAR=SOTTO_ORGANISATION_DELETION_METRICS_TOKEN
 OPERATOR_VAR=SOTTO_ORGANISATION_DELETION_OPERATOR_TOKEN
 
+# Registered before anything creates a temporary file, which is the only ordering that works:
+# both kinds hold a token. The header files hold one being sent, and the half-written .env holds
+# the fresh one on its way in, so a failure or a kill between writing and moving it would leave
+# a live secret on disk with nothing to clear it away.
+cleanup_temporaries() {
+  rm -f ./.sotto-rotate-hdr.* ./.env.rotating.* 2>/dev/null || true
+}
+trap cleanup_temporaries EXIT
+
 if [ ! -f .env ]; then
   echo "no .env here; run this from the deploy directory on the host" >&2
   exit 1
@@ -89,10 +98,7 @@ fi
 
 # Header files, so a token is never an argument to anything. argv is world readable: `ps` on a
 # shared host hands the bearer token to any local user for as long as the request runs, which
-# would be a poor way to end a script whose whole purpose is retiring exposed tokens. Removed as
-# soon as each request finishes, and on the way out if something goes wrong first.
-cleanup_headers() { rm -f ./.sotto-rotate-hdr.* 2>/dev/null || true; }
-trap cleanup_headers EXIT
+# would be a poor way to end a script whose whole purpose is retiring exposed tokens.
 
 with_token() {
   local token="$1" code hdr
