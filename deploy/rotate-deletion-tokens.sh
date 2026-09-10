@@ -78,7 +78,14 @@ done
 
 status() {
   # Prints a status code and nothing else, so a token used here cannot reach the output.
-  curl -s -o /dev/null -w '%{http_code}' "$@"
+  #
+  # Always succeeds, and always prints three digits. curl exits non-zero when it cannot connect,
+  # and this runs inside a command substitution: in an assignment that would end the script
+  # under `set -e`, silently, at the exact moment the operator most needs to be told what went
+  # wrong. `000` is curl's own way of saying there was no response, so it is what gets reported.
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$@" || true)"
+  printf '%s' "${code:-000}"
 }
 
 metrics_url="http://127.0.0.1:8080/ops/organisation-deletion/metrics"
