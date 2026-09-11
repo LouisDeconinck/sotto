@@ -112,6 +112,16 @@ sotto grant <user-id>                      # share the active environment (they 
 sotto token create --name ci               # SOTTO_TOKEN: run/export in CI, no password needed
 ```
 
+### Another device
+
+```sh
+sotto login                  # same account as the first machine
+sotto setup                  # unpack the Emergency Kit onto this device
+sotto pull                   # download the ciphertext you already pushed
+```
+
+You need the Emergency Kit printed by `sotto init`; without it, a new device cannot decrypt the vault.
+
 ## Architecture
 
 ```text
