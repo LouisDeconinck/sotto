@@ -1147,7 +1147,13 @@ fn env_use(store: &Store, cwd: &Path, name: &str) -> Result<()> {
 fn import_dotenv(app: &App, config: &Config, file: &Path) -> Result<()> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| Error::Io(format!("reading {}: {e}", file.display())))?;
-    let pairs = dotenv::parse(&text)?;
+    // The parser stays path-independent, so attach the file here at the import boundary:
+    // a script importing several files must be able to tell which one failed. Backticks
+    // delimit the path so names containing spaces still read clearly.
+    let pairs = dotenv::parse(&text).map_err(|e| match e {
+        Error::Input(message) => Error::Input(format!("`{}`: {message}", file.display())),
+        other => other,
+    })?;
     let count = pairs.len();
     for (name, value) in pairs {
         app.set(config, &name, value.as_bytes())?;
@@ -1411,7 +1417,14 @@ fn machine_export(token: &str, format: ExportFormat, reveal: bool) -> Result<()>
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{display_secret, Cli, Command};
+    use sotto_cli::commands::App;
+    use sotto_cli::config::Config;
+    use sotto_cli::keychain::MemoryKeychain;
+    use sotto_cli::session;
+    use sotto_cli::store::Store;
+    use sotto_cli::vault::Vault;
+
+    use super::{display_secret, import_dotenv, Cli, Command};
 
     #[test]
     fn run_help_explains_command_forwarding() {
@@ -1504,5 +1517,58 @@ mod tests {
         let b = display_secret(&[0xfe, 0x00]);
         assert!(a.starts_with("base64:"));
         assert_ne!(a, b);
+    }
+
+    /// A malformed `.env` must name the file it came from - a script importing several files
+    /// has to know which one failed - while keeping the parser's line number and reason. The
+    /// filename here contains a space so the backtick-quoted path stays readable, and the
+    /// earlier valid line must not be imported: parsing happens before any write.
+    #[test]
+    fn import_parse_error_names_the_input_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("with space.env");
+        std::fs::write(&file, "GOOD=1\nnot-an-assignment\n").unwrap();
+
+        let store = Store::open_in_memory().unwrap();
+        let keychain = MemoryKeychain::default();
+        session::init(
+            &store,
+            &keychain,
+            b"pw",
+            std::time::Duration::from_secs(3600),
+        )
+        .unwrap();
+        let master = session::current_master_key(&keychain).unwrap().unwrap();
+        let keypair = session::account_keypair(&store, &master).unwrap();
+        let project = Vault::create_project(&store, &keypair, "acme").unwrap();
+        let config = Config {
+            project_id: project.id,
+            project: "acme".into(),
+            environment: "dev".into(),
+            org_id: None,
+        };
+        let app = App::new(&store, &keychain);
+
+        let error = import_dotenv(&app, &config, &file).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("`{}`", file.display())),
+            "error should name the supplied path, quoted: {message}"
+        );
+        assert!(
+            message.contains("line 2"),
+            "error should keep the parser's line number: {message}"
+        );
+        assert!(
+            message.contains("expected KEY=value"),
+            "error should keep the parse-failure reason: {message}"
+        );
+        assert!(
+            !message.contains("GOOD"),
+            "error must not leak file contents: {message}"
+        );
+        // Still an input error (exit code 1), and nothing from the file was imported.
+        assert_eq!(error.exit_code(), 1);
+        assert!(app.list(&config).unwrap().is_empty());
     }
 }
